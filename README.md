@@ -1,4 +1,4 @@
-# translator_webui
+# novel-downloader-translator-webui
 
 一个用于**小说下载 + 翻译编排**的 Web 控制台（WebUI）项目。它把“下载器”和“翻译器”封装成可重复执行的**任务**：创建任务 → 后台执行 → 实时日志 → 下载/预览产物。
 
