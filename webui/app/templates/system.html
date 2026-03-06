@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>系统状态</h1>
+
+<section class="panel">
+  <h2>安全</h2>
+  <p>已配置有效密钥：<strong>{{ status.encryption_configured }}</strong></p>
+  <p>是否强制要求密钥：<strong>{{ status.secret_key_required }}</strong></p>
+</section>
+
+<section class="panel">
+  <h2>路径</h2>
+  <ul>
+    <li>数据目录（data_dir）：{{ status.paths.data_dir }}</li>
+    <li>数据库路径（db_path）：{{ status.paths.db_path }}</li>
+    <li>下载器入口（downloader_entry）：{{ status.paths.downloader_entry }}（存在={{ status.paths.downloader_exists }}）</li>
+    <li>翻译器入口（translator_entry）：{{ status.paths.translator_entry }}（存在={{ status.paths.translator_exists }}）</li>
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>命令检查</h2>
+  <ul>
+    <li>downloader_python：code={{ status.commands.downloader_python.code }}, ok={{ status.commands.downloader_python.ok }}, output={{ status.commands.downloader_python.output }}</li>
+    <li>translator_python：code={{ status.commands.translator_python.code }}, ok={{ status.commands.translator_python.ok }}, output={{ status.commands.translator_python.output }}</li>
+    <li>node：code={{ status.commands.node.code }}, ok={{ status.commands.node.ok }}, output={{ status.commands.node.output }}</li>
+    <li>npm：code={{ status.commands.npm.code }}, ok={{ status.commands.npm.ok }}, output={{ status.commands.npm.output }}</li>
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>磁盘</h2>
+  <ul>
+    <li>总容量：{{ status.disk.total }}</li>
+    <li>已使用：{{ status.disk.used }}</li>
+    <li>可用：{{ status.disk.free }}</li>
+  </ul>
+</section>
+{% endblock %}

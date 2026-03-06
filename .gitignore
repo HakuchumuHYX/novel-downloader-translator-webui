@@ -1,0 +1,72 @@
+# =========================
+# Secrets / local config
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Runtime data
+# =========================
+data/
+webui.sqlite3
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# Generated runtime artifacts
+uploads/
+downloads/
+tasks/
+
+# =========================
+# Python cache / virtualenv / build
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+.Python
+.python-version
+.venv/
+venv/
+env/
+ENV/
+
+build/
+dist/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Test / lint / type caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs / temp
+*.log
+tmp/
+temp/
+*.tmp
+
+# =========================
+# IDE / OS files
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# =========================
+# Node related (for downloader node backend environments)
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

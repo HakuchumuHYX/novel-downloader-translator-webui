@@ -1,0 +1,46 @@
+FROM node:20.11.1-bookworm-slim AS node_runtime
+
+FROM python:3.10.16-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tini \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node_runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+WORKDIR /app
+
+COPY bilingual_book_maker /app/bilingual_book_maker
+COPY syosetu_novel_downloader /app/syosetu_novel_downloader
+COPY webui /app/webui
+
+RUN pip install -r /app/bilingual_book_maker/requirements.txt \
+    && pip install PyMuPDF \
+    && pip install -r /app/syosetu_novel_downloader/requirements.txt \
+    && pip install -r /app/webui/requirements.txt
+
+RUN addgroup --system app \
+    && adduser --system --ingroup app --home /home/app --shell /usr/sbin/nologin app \
+    && mkdir -p /data \
+    && chown -R app:app /app /data
+
+ENV WEBUI_DATA_DIR=/data \
+    DOWNLOADER_ENTRY=/app/syosetu_novel_downloader/main.py \
+    TRANSLATOR_ENTRY=/app/bilingual_book_maker/make_book.py
+
+EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:7860/healthz', timeout=3).status == 200 else 1)"
+
+USER app
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["uvicorn", "webui.app.main:app", "--host", "0.0.0.0", "--port", "7860"]

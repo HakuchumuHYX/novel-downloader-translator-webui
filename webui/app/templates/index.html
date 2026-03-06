@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>任务列表</h1>
+<div class="actions">
+  <a class="btn" href="/tasks/new">创建任务</a>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>状态</th>
+      <th>来源</th>
+      <th>模式</th>
+      <th>创建时间</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in tasks %}
+    <tr>
+      <td>{{ t.id }}</td>
+      <td>
+        <span class="status status-{{ t.status }}">
+          {% if t.status == 'queued' %}排队中
+          {% elif t.status == 'running' %}运行中
+          {% elif t.status == 'succeeded' %}成功
+          {% elif t.status == 'failed' %}失败
+          {% elif t.status == 'canceled' %}已取消
+          {% else %}{{ t.status }}
+          {% endif %}
+        </span>
+      </td>
+      <td>
+        {% if t.source_type == 'upload' %}手动上传
+        {% elif t.source_type == 'kakuyomu' %}Kakuyomu
+        {% elif t.source_type == 'syosetu' %}Syosetu
+        {% elif t.source_type == 'syosetu-r18' %}Syosetu R18
+        {% else %}{{ t.source_type }}
+        {% endif %}
+      </td>
+      <td>
+        {% if t.mode == 'download_and_translate' %}下载并翻译
+        {% elif t.mode == 'download_only' %}仅下载
+        {% else %}{{ t.mode }}
+        {% endif %}
+      </td>
+      <td>{{ t.created_at }}</td>
+      <td><a href="/tasks/{{ t.id }}">查看详情</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>创建任务</h1>
+<form id="task-form" enctype="multipart/form-data" method="post" action="/api/tasks">
+  <section class="panel">
+    <h2>来源</h2>
+    <label>来源类型
+      <select name="source_type" id="source_type">
+        <option value="upload">手动上传</option>
+        <option value="kakuyomu">Kakuyomu</option>
+        <option value="syosetu">Syosetu</option>
+        <option value="syosetu-r18">Syosetu R18</option>
+      </select>
+    </label>
+    <label id="source_input_wrap">作品 URL 或 novel_id
+      <input type="text" name="source_input" id="source_input" placeholder="https://... 或 n1234ab">
+    </label>
+    <label id="upload_wrap">上传文件
+      <input type="file" name="upload_file" id="upload_file" accept=".txt,.epub,.md,.pdf,.srt">
+    </label>
+    <label>Cookie 配置
+      <select name="cookie_profile_id" id="cookie_profile_id">
+        <option value="">（无）</option>
+        {% for c in cookie_profiles %}
+        <option value="{{ c.id }}">#{{ c.id }} {{ c.name }} ({{ c.site }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p id="source_hint" class="hint"></p>
+  </section>
+
+  <section class="panel">
+    <h2>下载参数</h2>
+    <label>后端
+      <select name="backend">
+        <option value="auto">auto</option>
+        <option value="node">node</option>
+        <option value="native">native</option>
+      </select>
+    </label>
+    <label>付费策略
+      <select name="paid_policy">
+        <option value="skip">skip（跳过）</option>
+        <option value="fail">fail（失败）</option>
+        <option value="metadata">metadata（只记元数据）</option>
+      </select>
+    </label>
+    <label>输出格式
+      <select name="save_format">
+        <option value="txt">txt</option>
+        <option value="epub">epub</option>
+      </select>
+    </label>
+    <label>合并文件名
+      <input type="text" name="merged_name"
+        value="{{ '' if settings.merged_name == 'full_book' else settings.merged_name }}">
+    </label>
+    <p class="hint">留空将自动使用作品标题作为合并文件名。</p>
+    <label>下载超时（秒）
+      <input type="number" min="1" name="override__timeout" placeholder="{{ settings.timeout }}">
+    </label>
+    <label>下载重试次数
+      <input type="number" min="0" name="override__retries" placeholder="{{ settings.retries }}">
+    </label>
+    <label>下载限速（秒）
+      <input type="number" step="0.1" min="0" name="override__rate_limit" placeholder="{{ settings.rate_limit }}">
+    </label>
+    <label>任务进程超时（秒）
+      <input type="number" name="process_timeout" value="{{ settings.process_timeout }}">
+    </label>
+    <label class="checkbox"><input type="checkbox" name="merge_all" checked> 合并全部章节</label>
+    <label class="checkbox"><input type="checkbox" name="record_chapter_number"> 记录章节序号</label>
+  </section>
+
+  <section class="panel">
+    <h2>翻译参数</h2>
+    <label>任务模式
+      <select name="mode" id="mode">
+        <option value="download_and_translate">下载并翻译</option>
+        <option value="download_only">仅下载</option>
+      </select>
+    </label>
+    <label>翻译模式
+      <select name="translate_mode">
+        <option value="preview">预览（test）</option>
+        <option value="full">全量</option>
+      </select>
+    </label>
+    <label>翻译输出偏好
+      <select name="translation_output_mode">
+        <option value="translated_only" selected>仅译文</option>
+        <option value="bilingual">原文 + 译文</option>
+      </select>
+    </label>
+    <label>预览条数（test_num）
+      <input type="number" name="test_num" value="{{ settings.test_num }}">
+    </label>
+  </section>
+
+  <section class="panel">
+    <h2>任务级覆盖参数（可选）</h2>
+    <div class="two-col">
+      <label>model <input type="text" name="override__model" placeholder="{{ settings.model }}"></label>
+      <label>model_list <input type="text" name="override__model_list" placeholder="{{ settings.model_list }}"></label>
+      <label>api_base <input type="text" name="override__api_base" placeholder="{{ settings.api_base }}"></label>
+      <label>language <input type="text" name="override__language" placeholder="{{ settings.language }}"></label>
+      <label>source_lang <input type="text" name="override__source_lang"
+          placeholder="{{ settings.source_lang }}"></label>
+      <label>temperature <input type="text" name="override__temperature"
+          placeholder="{{ settings.temperature }}"></label>
+      <label>accumulated_num <input type="text" name="override__accumulated_num"
+          placeholder="{{ settings.accumulated_num }}"></label>
+      <label>parallel_workers <input type="text" name="override__parallel_workers"
+          placeholder="{{ settings.parallel_workers }}"></label>
+      <label>context_paragraph_limit <input type="text" name="override__context_paragraph_limit"
+          placeholder="{{ settings.context_paragraph_limit }}"></label>
+      <label>block_size <input type="text" name="override__block_size" placeholder="{{ settings.block_size }}"></label>
+      <label>translation_style <input type="text" name="override__translation_style"
+          placeholder="{{ settings.translation_style }}"></label>
+      <label>batch_size <input type="text" name="override__batch_size" placeholder="{{ settings.batch_size }}"></label>
+      <label>interval <input type="text" name="override__interval" placeholder="{{ settings.interval }}"></label>
+      <label>proxy <input type="text" name="override__proxy" placeholder="{{ settings.proxy }}"></label>
+      <label>deployment_id <input type="text" name="override__deployment_id"
+          placeholder="{{ settings.deployment_id }}"></label>
+      <label>prompt_file <input type="text" name="override__prompt_file"
+          placeholder="{{ settings.prompt_file }}"></label>
+      <label>prompt_text <input type="text" name="override__prompt_text"
+          placeholder="{{ settings.prompt_text }}"></label>
+      <label>prompt_system <input type="text" name="override__prompt_system"
+          placeholder="{{ settings.prompt_system }}"></label>
+      <label>prompt_user <input type="text" name="override__prompt_user"
+          placeholder="{{ settings.prompt_user }}"></label>
+      <label>openai_key <input type="password" name="override__openai_key" placeholder="（可选覆盖）"></label>
+      <label>claude_key <input type="password" name="override__claude_key" placeholder="（可选覆盖）"></label>
+      <label>gemini_key <input type="password" name="override__gemini_key" placeholder="（可选覆盖）"></label>
+      <label>groq_key <input type="password" name="override__groq_key" placeholder="（可选覆盖）"></label>
+      <label>xai_key <input type="password" name="override__xai_key" placeholder="（可选覆盖）"></label>
+      <label>qwen_key <input type="password" name="override__qwen_key" placeholder="（可选覆盖）"></label>
+      <label>caiyun_key <input type="password" name="override__caiyun_key" placeholder="（可选覆盖）"></label>
+      <label>deepl_key <input type="password" name="override__deepl_key" placeholder="（可选覆盖）"></label>
+      <label>custom_api <input type="password" name="override__custom_api" placeholder="（可选覆盖）"></label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>任务模板</h2>
+    <label>加载模板
+      <select name="template_id">
+        <option value="">（无）</option>
+        {% for t in templates %}
+        <option value="{{ t.id }}">#{{ t.id }} {{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>另存为模板
+      <input type="text" name="save_as_template" placeholder="例如：r18-default">
+    </label>
+  </section>
+
+  <button class="btn" type="submit">提交任务</button>
+</form>
+
+<pre id="result"></pre>
+
+<script>
+  const sourceType = document.getElementById('source_type');
+  const sourceInputWrap = document.getElementById('source_input_wrap');
+  const uploadWrap = document.getElementById('upload_wrap');
+  const sourceInput = document.getElementById('source_input');
+  const uploadFile = document.getElementById('upload_file');
+  const cookieProfile = document.getElementById('cookie_profile_id');
+  const sourceHint = document.getElementById('source_hint');
+
+  function syncSourceUI() {
+    const t = sourceType.value;
+
+    if (t === 'upload') {
+      sourceInputWrap.style.display = 'none';
+      uploadWrap.style.display = 'block';
+      sourceInput.required = false;
+      uploadFile.required = true;
+      cookieProfile.required = false;
+      sourceHint.textContent = '上传本地 txt/epub/md/pdf/srt 文件。';
+      return;
+    }
+
+    sourceInputWrap.style.display = 'block';
+    uploadWrap.style.display = 'none';
+    sourceInput.required = true;
+    uploadFile.required = false;
+
+    if (t === 'syosetu-r18') {
+      cookieProfile.required = true;
+      sourceHint.textContent = 'R18 来源必须选择 Cookie 配置。';
+    } else {
+      cookieProfile.required = false;
+      sourceHint.textContent = '可输入完整 URL，或（syosetu 系列）novel_id。';
+    }
+  }
+
+  sourceType.addEventListener('change', syncSourceUI);
+  syncSourceUI();
+
+  document.getElementById('task-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = new FormData(form);
+
+    const resp = await fetch('/api/tasks', { method: 'POST', body: fd });
+    const data = await resp.json();
+    document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+    if (resp.ok && data.task_id) {
+      window.location.href = `/tasks/${data.task_id}`;
+    }
+  });
+</script>
+{% endblock %}

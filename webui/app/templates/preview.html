@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>文件预览</h1>
+<p><strong>{{ title }}</strong></p>
+<div class="actions">
+  {% if page > 1 %}
+  <a class="btn" href="/api/tasks/{{ task_id }}/preview?artifact_id={{ artifact_id }}{% if compare_artifact_id %}&compare_artifact_id={{ compare_artifact_id }}{% endif %}&page={{ page - 1 }}">上一页</a>
+  {% endif %}
+  <span>第 {{ page }} / {{ total_pages }} 页</span>
+  {% if page < total_pages %}
+  <a class="btn" href="/api/tasks/{{ task_id }}/preview?artifact_id={{ artifact_id }}{% if compare_artifact_id %}&compare_artifact_id={{ compare_artifact_id }}{% endif %}&page={{ page + 1 }}">下一页</a>
+  {% endif %}
+</div>
+
+{% if compare_preview %}
+<div class="split-preview-grid">
+  <section>
+    <h3>左侧</h3>
+    <pre class="preview">{% for line in lines %}{{ line }}
+{% endfor %}</pre>
+  </section>
+  <section>
+    <h3>右侧{% if compare_artifact %}：{{ compare_artifact.file_name }}{% endif %}</h3>
+    <pre class="preview">{% for line in compare_preview.lines %}{{ line }}
+{% endfor %}</pre>
+  </section>
+</div>
+{% else %}
+<pre class="preview">{% for line in lines %}{{ line }}
+{% endfor %}</pre>
+{% endif %}
+{% endblock %}

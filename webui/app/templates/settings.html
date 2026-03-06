@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>设置</h1>
+<p class="hint">
+  加密密钥已配置：<strong>{{ "是" if encryption_configured else "否（将使用临时回退密钥）" }}</strong>
+  {% if secret_key_required and not encryption_configured %}
+  <span class="danger">WEBUI_REQUIRE_SECRET_KEY=true，但未配置有效 WEBUI_SECRET_KEY，服务应拒绝启动。</span>
+  {% endif %}
+</p>
+
+<section class="panel">
+  <h2>导入 / 导出 .env</h2>
+  <form id="import-env-form" enctype="multipart/form-data">
+    <label>上传 .env 文件 <input type="file" name="env_file" accept=".env,.txt"></label>
+    <label>或粘贴 env 文本 <textarea name="env_text" rows="5"></textarea></label>
+    <button class="btn" type="submit">导入到设置</button>
+    <a class="btn" href="/api/settings/export-env">下载导出的 .env</a>
+  </form>
+</section>
+
+<form id="settings-form" method="post" action="/api/settings">
+  <section class="panel">
+    <h2>翻译后端</h2>
+    <label>模型（model） <input type="text" name="model" value="{{ settings.model }}"></label>
+    <label>模型列表（model_list） <input type="text" name="model_list" value="{{ settings.model_list }}"></label>
+    <label>接口地址（api_base） <input type="text" name="api_base" value="{{ settings.api_base }}"></label>
+    <label>目标语言（language） <input type="text" name="language" value="{{ settings.language }}"></label>
+    <label>源语言（source_lang） <input type="text" name="source_lang" value="{{ settings.source_lang }}"></label>
+    <label>温度（temperature） <input type="text" name="temperature" value="{{ settings.temperature }}"></label>
+    <label>部署 ID（deployment_id） <input type="text" name="deployment_id" value="{{ settings.deployment_id }}"></label>
+  </section>
+
+  <section class="panel">
+    <h2>提示词</h2>
+    <label>提示词文件（prompt_file） <input type="text" name="prompt_file" value="{{ settings.prompt_file }}"></label>
+    <label>内联提示词（prompt_text） <textarea name="prompt_text" rows="4">{{ settings.prompt_text }}</textarea></label>
+    <label>系统提示词（prompt_system） <textarea name="prompt_system" rows="3">{{ settings.prompt_system }}</textarea></label>
+    <label>用户提示词（prompt_user） <textarea name="prompt_user" rows="4">{{ settings.prompt_user }}</textarea></label>
+    <p class="hint">优先级：prompt_file &gt; prompt_text &gt; (prompt_system + prompt_user)。使用 system/user 时，user 中需包含
+      {text}。</p>
+  </section>
+
+  <section class="panel">
+    <h2>运行参数</h2>
+    <label>测试模式（test） <input type="text" name="test" value="{{ settings.test }}"></label>
+    <label>测试条数（test_num） <input type="text" name="test_num" value="{{ settings.test_num }}"></label>
+    <label>断点续跑（resume） <input type="text" name="resume" value="{{ settings.resume }}"></label>
+    <label>累计段数（accumulated_num） <input type="text" name="accumulated_num"
+        value="{{ settings.accumulated_num }}"></label>
+    <label>并行数（parallel_workers） <input type="text" name="parallel_workers"
+        value="{{ settings.parallel_workers }}"></label>
+    <label>上下文模式（use_context） <input type="text" name="use_context" value="{{ settings.use_context }}"></label>
+    <label>上下文段落上限（context_paragraph_limit） <input type="text" name="context_paragraph_limit"
+        value="{{ settings.context_paragraph_limit }}"></label>
+    <label>分块大小（block_size） <input type="text" name="block_size" value="{{ settings.block_size }}"></label>
+    <label>翻译风格（translation_style） <input type="text" name="translation_style"
+        value="{{ settings.translation_style }}"></label>
+    <label>批量大小（batch_size） <input type="text" name="batch_size" value="{{ settings.batch_size }}"></label>
+    <label>翻译标签（translate_tags） <input type="text" name="translate_tags" value="{{ settings.translate_tags }}"></label>
+    <label>排除标签（exclude_translate_tags） <input type="text" name="exclude_translate_tags"
+        value="{{ settings.exclude_translate_tags }}"></label>
+    <label>允许导航字符串（allow_navigable_strings） <input type="text" name="allow_navigable_strings"
+        value="{{ settings.allow_navigable_strings }}"></label>
+    <label>请求间隔（interval） <input type="text" name="interval" value="{{ settings.interval }}"></label>
+  </section>
+
+  <section class="panel">
+    <h2>网络 / 下载 / Worker</h2>
+    <label>代理（proxy） <input type="text" name="proxy" value="{{ settings.proxy }}"></label>
+    <label>超时（timeout） <input type="text" name="timeout" value="{{ settings.timeout }}"></label>
+    <label>重试次数（retries） <input type="text" name="retries" value="{{ settings.retries }}"></label>
+    <label>限速（rate_limit） <input type="text" name="rate_limit" value="{{ settings.rate_limit }}"></label>
+    <label>下载后端（backend） <input type="text" name="backend" value="{{ settings.backend }}"></label>
+    <label>付费章节策略（paid_policy） <input type="text" name="paid_policy" value="{{ settings.paid_policy }}"></label>
+    <label>输出格式（save_format） <input type="text" name="save_format" value="{{ settings.save_format }}"></label>
+    <label>合并输出（merge_all） <input type="text" name="merge_all" value="{{ settings.merge_all }}"></label>
+    <label>合并文件名（merged_name） <input type="text" name="merged_name"
+        value="{{ '' if settings.merged_name == 'full_book' else settings.merged_name }}"></label>
+    <p class="hint">留空将自动使用作品标题作为合并文件名。</p>
+    <label>记录章节号（record_chapter_number） <input type="text" name="record_chapter_number"
+        value="{{ settings.record_chapter_number }}"></label>
+    <label>进程总超时（process_timeout） <input type="text" name="process_timeout"
+        value="{{ settings.process_timeout }}"></label>
+    <label>清理保留天数（cleanup_days） <input type="text" name="cleanup_days" value="{{ settings.cleanup_days }}"></label>
+    <label>清理状态（cleanup_statuses） <input type="text" name="cleanup_statuses"
+        value="{{ settings.cleanup_statuses }}"></label>
+  </section>
+
+  <section class="panel">
+    <h2>API 密钥（留空表示保持原值）</h2>
+    <label>openai_key <input type="password" name="openai_key" value=""></label>
+    <label>claude_key <input type="password" name="claude_key" value=""></label>
+    <label>gemini_key <input type="password" name="gemini_key" value=""></label>
+    <label>groq_key <input type="password" name="groq_key" value=""></label>
+    <label>xai_key <input type="password" name="xai_key" value=""></label>
+    <label>qwen_key <input type="password" name="qwen_key" value=""></label>
+    <label>caiyun_key <input type="password" name="caiyun_key" value=""></label>
+    <label>deepl_key <input type="password" name="deepl_key" value=""></label>
+    <label>custom_api <input type="password" name="custom_api" value=""></label>
+  </section>
+
+  <button class="btn" type="submit">保存设置</button>
+</form>
+
+<section class="panel">
+  <h2>Cookie 配置</h2>
+  <form id="cookie-parse-form" enctype="multipart/form-data">
+    <label>cookie_json_file <input type="file" name="cookie_json_file" accept=".json,application/json"></label>
+    <label>或 raw_text <textarea name="raw_text" rows="3"></textarea></label>
+    <button class="btn" type="submit">解析 JSON（仅预览）</button>
+    <button class="btn" id="apply-parsed-cookie" type="button" disabled>应用解析结果</button>
+  </form>
+
+  <pre id="cookie-parse-result"></pre>
+
+  <form id="cookie-form" method="post" action="/api/cookies" enctype="multipart/form-data">
+    <label>名称（name） <input type="text" name="name" required></label>
+    <label>站点（site） <input type="text" name="site" placeholder="kakuyomu / novel18 / syosetu（可留空自动推断）"></label>
+    <label>Cookie 文本（cookie） <textarea name="cookie" rows="3" placeholder="name=value; name2=value2"></textarea></label>
+    <label>cookie_json_file <input type="file" name="cookie_json_file" accept=".json,application/json"></label>
+    <p class="hint">先解析预览，再点“应用解析结果”回填，确认无误后保存。</p>
+    <button class="btn" type="submit">保存 Cookie 配置</button>
+  </form>
+  <table id="cookie-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>名称</th>
+        <th>站点</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in cookie_profiles %}
+      <tr>
+        <td>{{ c.id }}</td>
+        <td>{{ c.name }}</td>
+        <td>{{ c.site }}</td>
+        <td><button type="button" data-cookie-id="{{ c.id }}">删除</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>任务模板</h2>
+  <ul>
+    {% for t in templates %}
+    <li>#{{ t.id }} {{ t.name }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>系统</h2>
+  <a class="btn" href="/system">打开系统状态页</a>
+</section>
+
+<pre id="result"></pre>
+
+<script>
+  let parsedCookieHeader = '';
+  let parsedCookieSite = '';
+
+  function setResult(data) {
+    document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+  }
+
+  async function readResponseData(resp) {
+    const text = await resp.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return { detail: text };
+    }
+  }
+
+  async function postForm(form, url) {
+    try {
+      const resp = await fetch(url, { method: 'POST', body: new FormData(form) });
+      const data = await readResponseData(resp);
+      setResult(data);
+
+      if (!resp.ok) {
+        const message = data.detail || data.message || `请求失败（HTTP ${resp.status}）`;
+        throw new Error(message);
+      }
+
+      location.reload();
+    } catch (err) {
+      setResult({ ok: false, error: String(err) });
+    }
+  }
+
+  document.getElementById('settings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postForm(e.target, '/api/settings');
+  });
+
+  document.getElementById('import-env-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postForm(e.target, '/api/settings/import-env');
+  });
+
+  document.getElementById('cookie-parse-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const resp = await fetch('/api/cookies/parse-json', { method: 'POST', body: new FormData(e.target) });
+      const data = await readResponseData(resp);
+      document.getElementById('cookie-parse-result').textContent = JSON.stringify(data, null, 2);
+
+      if (!resp.ok) {
+        const message = data.detail || data.message || `解析失败（HTTP ${resp.status}）`;
+        throw new Error(message);
+      }
+
+      parsedCookieHeader = data.header || '';
+      parsedCookieSite = data.inferred_site || '';
+      document.getElementById('apply-parsed-cookie').disabled = !parsedCookieHeader;
+    } catch (err) {
+      setResult({ ok: false, error: String(err) });
+    }
+  });
+
+  document.getElementById('apply-parsed-cookie').addEventListener('click', () => {
+    if (!parsedCookieHeader) return;
+
+    const form = document.getElementById('cookie-form');
+    const cookieText = form.querySelector('textarea[name="cookie"]');
+    const siteInput = form.querySelector('input[name="site"]');
+
+    cookieText.value = parsedCookieHeader;
+    if (!siteInput.value && parsedCookieSite) {
+      siteInput.value = parsedCookieSite;
+    }
+  });
+
+  document.getElementById('cookie-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await postForm(e.target, '/api/cookies');
+  });
+
+  document.getElementById('cookie-table').addEventListener('click', async (e) => {
+    const button = e.target.closest('button[data-cookie-id]');
+    if (!button) return;
+    const id = button.getAttribute('data-cookie-id');
+    if (!id) return;
+    await deleteCookie(id);
+  });
+
+  function getErrorMessage(data, fallback) {
+    if (!data) return fallback;
+    const detail = data.detail;
+    if (typeof detail === 'string' && detail) return detail;
+    if (detail && typeof detail === 'object') {
+      if (typeof detail.message === 'string' && detail.message) return detail.message;
+      return JSON.stringify(detail, null, 2);
+    }
+    if (typeof data.message === 'string' && data.message) return data.message;
+    return fallback;
+  }
+
+  async function deleteCookie(id, force = false) {
+    try {
+      const suffix = force ? '?force=1' : '';
+      const resp = await fetch(`/api/cookies/${id}${suffix}`, { method: 'DELETE' });
+      const data = await readResponseData(resp);
+      setResult(data);
+
+      if (!resp.ok) {
+        const detail = data.detail;
+        const canForce = !force && resp.status === 409 && detail && typeof detail === 'object' && detail.force_supported;
+        if (canForce) {
+          const totalRefs = Number(detail.total_refs || 0);
+          const runningRefs = Number(detail.running_refs || 0);
+          const confirmed = window.confirm(
+            `该 Cookie 被任务引用（总计 ${totalRefs}，运行中 ${runningRefs}）。\n` +
+            `强制删除将解除非运行任务的引用，是否继续？`
+          );
+          if (confirmed) {
+            await deleteCookie(id, true);
+            return;
+          }
+          return;
+        }
+
+        const message = getErrorMessage(data, `删除失败（HTTP ${resp.status}）`);
+        throw new Error(message);
+      }
+
+      location.reload();
+    } catch (err) {
+      setResult({ ok: false, error: String(err) });
+    }
+  }
+</script>
+{% endblock %}

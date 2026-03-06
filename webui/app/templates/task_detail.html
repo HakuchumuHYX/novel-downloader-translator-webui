@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>任务 #{{ task.id }}</h1>
+<div class="grid">
+  <section class="panel">
+    <h2>任务信息</h2>
+    <p>
+      状态：
+      <span id="status" class="status status-{{ task.status }}">
+        {% if task.status == 'queued' %}排队中
+        {% elif task.status == 'running' %}运行中
+        {% elif task.status == 'succeeded' %}成功
+        {% elif task.status == 'failed' %}失败
+        {% elif task.status == 'canceled' %}已取消
+        {% else %}{{ task.status }}
+        {% endif %}
+      </span>
+    </p>
+    <p>来源：<span id="source_type"></span></p>
+    <p>模式：<span id="mode"></span></p>
+    <p>错误码：<code id="error_code">{{ task.error_code }}</code></p>
+    <p>错误信息：<code id="error">{{ task.error_message }}</code></p>
+    <p>创建时间：{{ task.created_at }}</p>
+    <p>开始时间：{{ task.started_at }}</p>
+    <p>结束时间：{{ task.finished_at }}</p>
+
+    <div class="actions">
+      <button onclick="retryTask()">重试</button>
+      <button onclick="runFullTask()">基于当前结果全量重跑</button>
+      <button onclick="cancelTask()">取消排队任务</button>
+      <button onclick="stopTask()">停止运行中任务</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>产物文件</h2>
+    <ul id="artifact-list">
+      {% for a in artifacts %}
+      <li>
+        [{% if a.kind == 'source' %}原文{% elif a.kind == 'translated' %}译文{% elif a.kind == 'manifest' %}清单{% elif a.kind == 'log' %}日志{% elif a.kind == 'other' %}其他{% else %}{{ a.kind }}{% endif %}] {{ a.file_name }}
+        ({{ a.file_size }} 字节, {{ a.modified_at or a.created_at }})
+        <a href="/api/tasks/{{ task.id }}/download?artifact_id={{ a.id }}">下载</a>
+        <a href="/api/tasks/{{ task.id }}/preview?artifact_id={{ a.id }}">预览</a>
+      </li>
+      {% endfor %}
+    </ul>
+
+    <h3>左右对照预览</h3>
+    <form id="split-preview-form" method="get" action="/api/tasks/{{ task.id }}/preview">
+      <label>左侧产物 ID
+        <input type="number" name="artifact_id" value="{{ source_artifact_id if source_artifact_id else '' }}" required>
+      </label>
+      <label>右侧产物 ID
+        <input type="number" name="compare_artifact_id" value="{{ translated_artifact_id if translated_artifact_id else '' }}" required>
+      </label>
+      <label>页码
+        <input type="number" name="page" value="1" min="1">
+      </label>
+      <button type="submit">打开对照预览</button>
+    </form>
+  </section>
+</div>
+
+<section class="panel">
+  <h2>运行日志</h2>
+  <pre id="logs" class="logs"></pre>
+</section>
+
+<script>
+const rawStatus = {{ task.status | tojson }};
+const rawSourceType = {{ task.source_type | tojson }};
+const rawMode = {{ task.mode | tojson }};
+
+function statusText(status) {
+  const map = {
+    queued: '排队中',
+    running: '运行中',
+    succeeded: '成功',
+    failed: '失败',
+    canceled: '已取消'
+  };
+  return map[status] || status;
+}
+
+function sourceText(source) {
+  const map = {
+    upload: '手动上传',
+    kakuyomu: 'Kakuyomu',
+    syosetu: 'Syosetu',
+    'syosetu-r18': 'Syosetu R18'
+  };
+  return map[source] || source;
+}
+
+function modeText(mode) {
+  const map = {
+    download_and_translate: '下载并翻译',
+    download_only: '仅下载'
+  };
+  return map[mode] || mode;
+}
+
+function artifactKindText(kind) {
+  const map = {
+    source: '原文',
+    translated: '译文',
+    manifest: '清单',
+    log: '日志',
+    other: '其他'
+  };
+  return map[kind] || kind;
+}
+
+let offset = 0;
+
+async function pollLogs() {
+  const resp = await fetch(`/api/tasks/{{ task.id }}/logs?offset=${offset}`);
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const logs = document.getElementById('logs');
+  for (const row of data.items) {
+    logs.textContent += `[${row.created_at}] ${row.message}\n`;
+  }
+  offset = data.next_offset;
+}
+
+async function refreshTask() {
+  const resp = await fetch(`/api/tasks/{{ task.id }}`);
+  if (!resp.ok) return;
+  const task = await resp.json();
+  const status = document.getElementById('status');
+  status.textContent = statusText(task.status);
+  status.className = `status status-${task.status}`;
+  document.getElementById('source_type').textContent = sourceText(task.source_type);
+  document.getElementById('mode').textContent = modeText(task.mode);
+  document.getElementById('error').textContent = task.error_message || '';
+  document.getElementById('error_code').textContent = task.error_code || '';
+
+  const list = document.getElementById('artifact-list');
+  list.innerHTML = '';
+  for (const a of task.artifacts) {
+    const when = a.modified_at || a.created_at || '';
+    const li = document.createElement('li');
+    li.innerHTML = `[${artifactKindText(a.kind)}] ${a.file_name} (${a.file_size || 0} 字节, ${when}) <a href="/api/tasks/{{ task.id }}/download?artifact_id=${a.id}">下载</a> <a href="/api/tasks/{{ task.id }}/preview?artifact_id=${a.id}">预览</a>`;
+    list.appendChild(li);
+  }
+}
+
+async function retryTask() {
+  const resp = await fetch('/api/tasks/{{ task.id }}/retry', { method: 'POST' });
+  if (!resp.ok) return;
+  const data = await resp.json();
+  window.location.href = `/tasks/${data.task_id}`;
+}
+
+async function runFullTask() {
+  const resp = await fetch('/api/tasks/{{ task.id }}/run-full', { method: 'POST' });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }));
+    alert(`创建全量任务失败: ${data.detail || resp.status}`);
+    return;
+  }
+  const data = await resp.json();
+  window.location.href = `/tasks/${data.task_id}`;
+}
+
+async function cancelTask() {
+  await fetch('/api/tasks/{{ task.id }}/cancel', { method: 'POST' });
+  await refreshTask();
+}
+
+async function stopTask() {
+  await fetch('/api/tasks/{{ task.id }}/stop', { method: 'POST' });
+  await refreshTask();
+}
+
+document.getElementById('status').textContent = statusText(rawStatus);
+document.getElementById('source_type').textContent = sourceText(rawSourceType);
+document.getElementById('mode').textContent = modeText(rawMode);
+
+setInterval(async () => {
+  await pollLogs();
+  await refreshTask();
+}, 2000);
+
+pollLogs();
+refreshTask();
+</script>
+{% endblock %}
+

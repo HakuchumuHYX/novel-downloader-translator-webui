@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title if title else "小说抓取与翻译 WebUI" }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">小说抓取与翻译</div>
+    <nav>
+      <a href="/">任务列表</a>
+      <a href="/tasks/new">新建任务</a>
+      <a href="/settings">设置</a>
+      <a href="/system">系统状态</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
