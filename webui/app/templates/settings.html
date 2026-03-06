@@ -1,12 +1,24 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>设置</h1>
+<div id="settings-meta" data-encryption-configured="{{ '1' if encryption_configured else '0' }}" style="display:none">
+</div>
 <p class="hint">
   加密密钥已配置：<strong>{{ "是" if encryption_configured else "否（将使用临时回退密钥）" }}</strong>
   {% if secret_key_required and not encryption_configured %}
   <span class="danger">WEBUI_REQUIRE_SECRET_KEY=true，但未配置有效 WEBUI_SECRET_KEY，服务应拒绝启动。</span>
   {% endif %}
 </p>
+
+{% if not encryption_configured %}
+<p class="danger">
+  未配置有效 WEBUI_SECRET_KEY：为避免误以为 Cookie 已被安全加密存储，WebUI 将默认<strong>禁止保存 Cookie 配置</strong>。
+  请先配置 WEBUI_SECRET_KEY（Fernet key），或在保存 Cookie 时勾选“仍要以不安全回退密钥保存”。
+</p>
+<p class="hint">
+  生成密钥示例：<code>python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code>
+</p>
+{% endif %}
 
 <section class="panel">
   <h2>导入 / 导出 .env</h2>
@@ -119,6 +131,14 @@
     <label>Cookie 文本（cookie） <textarea name="cookie" rows="3" placeholder="name=value; name2=value2"></textarea></label>
     <label>cookie_json_file <input type="file" name="cookie_json_file" accept=".json,application/json"></label>
     <p class="hint">先解析预览，再点“应用解析结果”回填，确认无误后保存。</p>
+
+    {% if not encryption_configured %}
+    <label class="danger">
+      <input type="checkbox" name="allow_insecure" value="1">
+      我理解风险，仍要以不安全回退密钥保存（不建议）
+    </label>
+    {% endif %}
+
     <button class="btn" type="submit">保存 Cookie 配置</button>
   </form>
   <table id="cookie-table">
@@ -184,7 +204,7 @@
       setResult(data);
 
       if (!resp.ok) {
-        const message = data.detail || data.message || `请求失败（HTTP ${resp.status}）`;
+        const message = getErrorMessage(data, `请求失败（HTTP ${resp.status}）`);
         throw new Error(message);
       }
 
@@ -237,8 +257,27 @@
     }
   });
 
+  const settingsMeta = document.getElementById('settings-meta');
+  const ENCRYPTION_CONFIGURED = settingsMeta && settingsMeta.dataset.encryptionConfigured === '1';
+
   document.getElementById('cookie-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+
+    if (!ENCRYPTION_CONFIGURED) {
+      const allow = e.target.querySelector('input[name="allow_insecure"]');
+      const checked = allow && allow.checked;
+      if (!checked) {
+        alert('未配置 WEBUI_SECRET_KEY：默认禁止保存 Cookie。请先配置密钥，或勾选“仍要以不安全回退密钥保存”。');
+        return;
+      }
+      const confirmed = window.confirm(
+        '确认以不安全回退密钥保存 Cookie？\n' +
+        '风险：回退密钥固定且可被推导，等同于明文存储。\n' +
+        '建议：配置 WEBUI_SECRET_KEY 后再保存。'
+      );
+      if (!confirmed) return;
+    }
+
     await postForm(e.target, '/api/cookies');
   });
 

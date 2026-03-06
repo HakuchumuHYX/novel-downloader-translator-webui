@@ -25,10 +25,10 @@
     <p>结束时间：{{ task.finished_at }}</p>
 
     <div class="actions">
-      <button onclick="retryTask()">重试</button>
-      <button onclick="runFullTask()">基于当前结果全量重跑</button>
-      <button onclick="cancelTask()">取消排队任务</button>
-      <button onclick="stopTask()">停止运行中任务</button>
+      <button id="retry-btn" onclick="retryTask()">重试</button>
+      <button id="run-full-btn" onclick="runFullTask()">基于当前结果全量重跑</button>
+      <button id="cancel-btn" onclick="cancelTask()">取消排队任务</button>
+      <button id="stop-btn" onclick="stopTask()">停止运行中任务</button>
     </div>
   </section>
 
@@ -37,7 +37,8 @@
     <ul id="artifact-list">
       {% for a in artifacts %}
       <li>
-        [{% if a.kind == 'source' %}原文{% elif a.kind == 'translated' %}译文{% elif a.kind == 'manifest' %}清单{% elif a.kind == 'log' %}日志{% elif a.kind == 'other' %}其他{% else %}{{ a.kind }}{% endif %}] {{ a.file_name }}
+        [{% if a.kind == 'source' %}原文{% elif a.kind == 'translated' %}译文{% elif a.kind == 'manifest' %}清单{% elif a.kind
+        == 'log' %}日志{% elif a.kind == 'other' %}其他{% else %}{{ a.kind }}{% endif %}] {{ a.file_name }}
         ({{ a.file_size }} 字节, {{ a.modified_at or a.created_at }})
         <a href="/api/tasks/{{ task.id }}/download?artifact_id={{ a.id }}">下载</a>
         <a href="/api/tasks/{{ task.id }}/preview?artifact_id={{ a.id }}">预览</a>
@@ -51,7 +52,8 @@
         <input type="number" name="artifact_id" value="{{ source_artifact_id if source_artifact_id else '' }}" required>
       </label>
       <label>右侧产物 ID
-        <input type="number" name="compare_artifact_id" value="{{ translated_artifact_id if translated_artifact_id else '' }}" required>
+        <input type="number" name="compare_artifact_id"
+          value="{{ translated_artifact_id if translated_artifact_id else '' }}" required>
       </label>
       <label>页码
         <input type="number" name="page" value="1" min="1">
@@ -66,125 +68,259 @@
   <pre id="logs" class="logs"></pre>
 </section>
 
+<div id="task-meta" data-status="{{ task.status }}" data-source-type="{{ task.source_type }}"
+  data-mode="{{ task.mode }}" style="display:none"></div>
+
 <script>
-const rawStatus = {{ task.status | tojson }};
-const rawSourceType = {{ task.source_type | tojson }};
-const rawMode = {{ task.mode | tojson }};
+  const meta = document.getElementById('task-meta');
+  const rawStatus = meta?.dataset?.status || '';
+  const rawSourceType = meta?.dataset?.sourceType || '';
+  const rawMode = meta?.dataset?.mode || '';
 
-function statusText(status) {
-  const map = {
-    queued: '排队中',
-    running: '运行中',
-    succeeded: '成功',
-    failed: '失败',
-    canceled: '已取消'
-  };
-  return map[status] || status;
-}
+  function statusText(status) {
+    const map = {
+      queued: '排队中',
+      running: '运行中',
+      succeeded: '成功',
+      failed: '失败',
+      canceled: '已取消'
+    };
+    return map[status] || status;
+  }
 
-function sourceText(source) {
-  const map = {
-    upload: '手动上传',
-    kakuyomu: 'Kakuyomu',
-    syosetu: 'Syosetu',
-    'syosetu-r18': 'Syosetu R18'
-  };
-  return map[source] || source;
-}
+  function sourceText(source) {
+    const map = {
+      upload: '手动上传',
+      kakuyomu: 'Kakuyomu',
+      syosetu: 'Syosetu',
+      'syosetu-r18': 'Syosetu R18'
+    };
+    return map[source] || source;
+  }
 
-function modeText(mode) {
-  const map = {
-    download_and_translate: '下载并翻译',
-    download_only: '仅下载'
-  };
-  return map[mode] || mode;
-}
+  function modeText(mode) {
+    const map = {
+      download_and_translate: '下载并翻译',
+      download_only: '仅下载'
+    };
+    return map[mode] || mode;
+  }
 
-function artifactKindText(kind) {
-  const map = {
-    source: '原文',
-    translated: '译文',
-    manifest: '清单',
-    log: '日志',
-    other: '其他'
-  };
-  return map[kind] || kind;
-}
+  function artifactKindText(kind) {
+    const map = {
+      source: '原文',
+      translated: '译文',
+      manifest: '清单',
+      log: '日志',
+      other: '其他'
+    };
+    return map[kind] || kind;
+  }
 
-let offset = 0;
+  let offset = 0;
 
-async function pollLogs() {
-  const resp = await fetch(`/api/tasks/{{ task.id }}/logs?offset=${offset}`);
-  if (!resp.ok) return;
-  const data = await resp.json();
-  const logs = document.getElementById('logs');
-  for (const row of data.items) {
+  const FINISHED_STATES = new Set(['succeeded', 'failed', 'canceled']);
+  let pollTimer = null;
+
+  function updateButtons(task) {
+    const status = task?.status || rawStatus;
+
+    const retryBtn = document.getElementById('retry-btn');
+    const runFullBtn = document.getElementById('run-full-btn');
+    const cancelBtn = document.getElementById('cancel-btn');
+    const stopBtn = document.getElementById('stop-btn');
+
+    // Retry: avoid creating "retry of running task" by mistake.
+    retryBtn.disabled = status === 'running' || status === 'queued';
+
+    // Run-full: only makes sense when we have some result already.
+    runFullBtn.disabled = status === 'running' || status === 'queued';
+
+    // Cancel only queued, stop only running.
+    cancelBtn.disabled = status !== 'queued';
+    stopBtn.disabled = status !== 'running';
+  }
+
+  async function readResponseData(resp) {
+    const text = await resp.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return { detail: text };
+    }
+  }
+
+  async function post(url) {
+    const resp = await fetch(url, { method: 'POST' });
+    const data = await readResponseData(resp);
+    if (!resp.ok) {
+      const detail = data.detail || `HTTP ${resp.status}`;
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2));
+    }
+    return data;
+  }
+
+  let logSource = null;
+  let lastKnownStatus = rawStatus;
+
+  function appendLogLine(row) {
+    const logs = document.getElementById('logs');
     logs.textContent += `[${row.created_at}] ${row.message}\n`;
   }
-  offset = data.next_offset;
-}
 
-async function refreshTask() {
-  const resp = await fetch(`/api/tasks/{{ task.id }}`);
-  if (!resp.ok) return;
-  const task = await resp.json();
-  const status = document.getElementById('status');
-  status.textContent = statusText(task.status);
-  status.className = `status status-${task.status}`;
-  document.getElementById('source_type').textContent = sourceText(task.source_type);
-  document.getElementById('mode').textContent = modeText(task.mode);
-  document.getElementById('error').textContent = task.error_message || '';
-  document.getElementById('error_code').textContent = task.error_code || '';
-
-  const list = document.getElementById('artifact-list');
-  list.innerHTML = '';
-  for (const a of task.artifacts) {
-    const when = a.modified_at || a.created_at || '';
-    const li = document.createElement('li');
-    li.innerHTML = `[${artifactKindText(a.kind)}] ${a.file_name} (${a.file_size || 0} 字节, ${when}) <a href="/api/tasks/{{ task.id }}/download?artifact_id=${a.id}">下载</a> <a href="/api/tasks/{{ task.id }}/preview?artifact_id=${a.id}">预览</a>`;
-    list.appendChild(li);
+  async function pollLogsOnce() {
+    const resp = await fetch(`/api/tasks/{{ task.id }}/logs?offset=${offset}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    for (const row of data.items) {
+      appendLogLine(row);
+    }
+    offset = data.next_offset;
   }
-}
 
-async function retryTask() {
-  const resp = await fetch('/api/tasks/{{ task.id }}/retry', { method: 'POST' });
-  if (!resp.ok) return;
-  const data = await resp.json();
-  window.location.href = `/tasks/${data.task_id}`;
-}
+  function startLogStream() {
+    if (logSource) {
+      try { logSource.close(); } catch (_) { }
+      logSource = null;
+    }
 
-async function runFullTask() {
-  const resp = await fetch('/api/tasks/{{ task.id }}/run-full', { method: 'POST' });
-  if (!resp.ok) {
-    const data = await resp.json().catch(() => ({ detail: `HTTP ${resp.status}` }));
-    alert(`创建全量任务失败: ${data.detail || resp.status}`);
-    return;
+    const url = `/api/tasks/{{ task.id }}/logs/stream?offset=${offset}`;
+    const es = new EventSource(url);
+    logSource = es;
+
+    es.onmessage = (ev) => {
+      if (!ev?.data) return;
+      let row = null;
+      try {
+        row = JSON.parse(ev.data);
+      } catch (_) {
+        return;
+      }
+      if (!row) return;
+      if (typeof row.id === 'number') offset = row.id;
+      appendLogLine(row);
+    };
+
+    es.onerror = async () => {
+      // SSE may not work behind some proxies; fall back to polling.
+      try { es.close(); } catch (_) { }
+      if (logSource === es) logSource = null;
+
+      if (FINISHED_STATES.has(lastKnownStatus)) return;
+
+      // best-effort fallback
+      try {
+        await pollLogsOnce();
+      } catch (_) { }
+
+      // Keep polling logs after SSE failure (low frequency).
+      setTimeout(async function loop() {
+        if (FINISHED_STATES.has(lastKnownStatus)) return;
+        try {
+          await pollLogsOnce();
+        } finally {
+          setTimeout(loop, 1500);
+        }
+      }, 1500);
+    };
   }
-  const data = await resp.json();
-  window.location.href = `/tasks/${data.task_id}`;
-}
 
-async function cancelTask() {
-  await fetch('/api/tasks/{{ task.id }}/cancel', { method: 'POST' });
-  await refreshTask();
-}
+  async function refreshTask() {
+    const resp = await fetch(`/api/tasks/{{ task.id }}`);
+    if (!resp.ok) return null;
+    const task = await resp.json();
+    const status = document.getElementById('status');
+    status.textContent = statusText(task.status);
+    status.className = `status status-${task.status}`;
+    document.getElementById('source_type').textContent = sourceText(task.source_type);
+    document.getElementById('mode').textContent = modeText(task.mode);
+    document.getElementById('error').textContent = task.error_message || '';
+    document.getElementById('error_code').textContent = task.error_code || '';
 
-async function stopTask() {
-  await fetch('/api/tasks/{{ task.id }}/stop', { method: 'POST' });
-  await refreshTask();
-}
+    updateButtons(task);
 
-document.getElementById('status').textContent = statusText(rawStatus);
-document.getElementById('source_type').textContent = sourceText(rawSourceType);
-document.getElementById('mode').textContent = modeText(rawMode);
+    const list = document.getElementById('artifact-list');
+    list.innerHTML = '';
+    for (const a of task.artifacts) {
+      const when = a.modified_at || a.created_at || '';
+      const li = document.createElement('li');
+      li.innerHTML = `[${artifactKindText(a.kind)}] ${a.file_name} (${a.file_size || 0} 字节, ${when}) <a href="/api/tasks/{{ task.id }}/download?artifact_id=${a.id}">下载</a> <a href="/api/tasks/{{ task.id }}/preview?artifact_id=${a.id}">预览</a>`;
+      list.appendChild(li);
+    }
 
-setInterval(async () => {
-  await pollLogs();
-  await refreshTask();
-}, 2000);
+    return task;
+  }
 
-pollLogs();
-refreshTask();
+  async function retryTask() {
+    try {
+      const data = await post('/api/tasks/{{ task.id }}/retry');
+      window.location.href = `/tasks/${data.task_id}`;
+    } catch (err) {
+      alert(`重试失败: ${String(err)}`);
+    }
+  }
+
+  async function runFullTask() {
+    try {
+      const data = await post('/api/tasks/{{ task.id }}/run-full');
+      window.location.href = `/tasks/${data.task_id}`;
+    } catch (err) {
+      alert(`创建全量任务失败: ${String(err)}`);
+    }
+  }
+
+  async function cancelTask() {
+    try {
+      await post('/api/tasks/{{ task.id }}/cancel');
+    } catch (err) {
+      alert(`取消失败: ${String(err)}`);
+    } finally {
+      await refreshTask();
+    }
+  }
+
+  async function stopTask() {
+    try {
+      await post('/api/tasks/{{ task.id }}/stop');
+    } catch (err) {
+      alert(`停止失败: ${String(err)}`);
+    } finally {
+      await refreshTask();
+    }
+  }
+
+  async function tick() {
+    const task = await refreshTask();
+    const status = task?.status || rawStatus;
+    lastKnownStatus = status;
+
+    if (FINISHED_STATES.has(status)) {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+
+      // Close SSE and do one last drain via polling (best-effort).
+      if (logSource) {
+        try { logSource.close(); } catch (_) { }
+        logSource = null;
+      }
+      setTimeout(async () => {
+        await pollLogsOnce();
+        await refreshTask();
+      }, 300);
+    }
+  }
+
+  document.getElementById('status').textContent = statusText(rawStatus);
+  document.getElementById('source_type').textContent = sourceText(rawSourceType);
+  document.getElementById('mode').textContent = modeText(rawMode);
+  updateButtons({ status: rawStatus });
+
+  // Start SSE log stream first; task polling stays at low frequency.
+  startLogStream();
+  pollTimer = setInterval(tick, 2000);
+  tick();
 </script>
 {% endblock %}
-

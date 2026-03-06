@@ -49,8 +49,30 @@ def encrypt_text(plain_text: str) -> str:
     return get_fernet().encrypt(plain_text.encode("utf-8")).decode("utf-8")
 
 
+def _get_fallback_fernet() -> Fernet:
+    fallback = _fallback_key_material()
+    return Fernet(fallback.encode("ascii"))
+
+
 def decrypt_text(cipher_text: str) -> str:
-    return get_fernet().decrypt(cipher_text.encode("utf-8")).decode("utf-8")
+    """
+    Decrypt text with best-effort backward compatibility.
+
+    If WEBUI_SECRET_KEY is configured, we decrypt with that key first.
+    If it fails (e.g. data was encrypted earlier using the fallback key),
+    we try the fallback key as a second chance to avoid "locking" users out
+    of previously saved secrets after configuring WEBUI_SECRET_KEY.
+    """
+    token = cipher_text.encode("utf-8")
+    fernet = get_fernet()
+    try:
+        return fernet.decrypt(token).decode("utf-8")
+    except Exception:
+        # If a valid secret key is configured, data may have been created
+        # before the key existed (fallback). Try fallback for migration.
+        if encryption_configured():
+            return _get_fallback_fernet().decrypt(token).decode("utf-8")
+        raise
 
 
 def verify_basic_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:

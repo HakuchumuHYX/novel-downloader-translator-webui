@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -15,6 +16,13 @@ def utcnow_iso() -> str:
 def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
+
+    # WAL improves concurrency, but writers can still hit "database is locked" briefly.
+    # busy_timeout lets SQLite wait a bit for locks instead of failing immediately.
+    busy_timeout_ms = int(os.getenv("WEBUI_SQLITE_BUSY_TIMEOUT_MS", "5000"))
+    if busy_timeout_ms > 0:
+        conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms};")
+
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import shutil
 import subprocess
@@ -32,13 +33,13 @@ from .task_service import (
 class TaskWorker(threading.Thread):
     def __init__(self) -> None:
         super().__init__(daemon=True)
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._cleanup_tick = 0
         self._proc_lock = threading.Lock()
         self._running: dict[int, subprocess.Popen[str]] = {}
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def stop_task(self, task_id: int) -> bool:
         with get_conn() as conn:
@@ -54,7 +55,7 @@ class TaskWorker(threading.Thread):
 
     def run(self) -> None:
         cfg = get_config()
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             task_id = None
             with get_conn() as conn:
                 row = claim_next_queued_task(conn)
@@ -63,7 +64,7 @@ class TaskWorker(threading.Thread):
 
             if task_id is None:
                 self._maybe_cleanup()
-                self._stop.wait(cfg.worker_interval_seconds)
+                self._stop_event.wait(cfg.worker_interval_seconds)
                 continue
 
             try:
@@ -146,10 +147,13 @@ class TaskWorker(threading.Thread):
             if translated_path and translated_path.exists():
                 add_artifact(conn, task_id, "translated", translated_path)
 
+            existing = {Path(r["file_path"]) for r in list_artifacts(conn, task_id)}
             for extra in self._collect_artifacts(task_root):
+                if extra in existing:
+                    continue
                 kind = self._artifact_kind(extra)
-                if not any(Path(r["file_path"]) == extra for r in list_artifacts(conn, task_id)):
-                    add_artifact(conn, task_id, kind, extra)
+                add_artifact(conn, task_id, kind, extra)
+                existing.add(extra)
 
             set_task_finished(
                 conn,
@@ -226,22 +230,22 @@ class TaskWorker(threading.Thread):
             command.extend(["--novel_id", source_input])
 
         cookie_file_path: Path | None = None
-        cookie_profile_id = payload.get("cookie_profile_id")
-        if cookie_profile_id:
-            with get_conn() as conn:
-                profile = get_cookie_profile(conn, int(cookie_profile_id))
-            if profile:
-                cookie_value = decrypt_text(profile["cookie_enc"])
-                cookie_file_path = download_root / f".cookie_{task_id}.txt"
-                cookie_file_path.write_text(cookie_value, encoding="utf-8")
-                command.extend(["--cookie-file", str(cookie_file_path)])
-
-        timeout_seconds = int(
-            payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds
-        )
-
-        self._log(task_id, "Running downloader command")
         try:
+            cookie_profile_id = payload.get("cookie_profile_id")
+            if cookie_profile_id:
+                with get_conn() as conn:
+                    profile = get_cookie_profile(conn, int(cookie_profile_id))
+                if profile:
+                    cookie_value = decrypt_text(profile["cookie_enc"])
+                    cookie_file_path = download_root / f".cookie_{task_id}.txt"
+                    cookie_file_path.write_text(cookie_value, encoding="utf-8")
+                    command.extend(["--cookie-file", str(cookie_file_path)])
+
+            timeout_seconds = int(
+                payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds
+            )
+
+            self._log(task_id, "Running downloader command")
             self._run_command(task_id, command, cwd=str(cfg.downloader_entry.parent), timeout_seconds=timeout_seconds)
 
             source_path = self._resolve_source_file(
@@ -373,14 +377,27 @@ class TaskWorker(threading.Thread):
         cfg = get_config()
         if process.poll() is not None:
             return
+
+        # Best-effort terminate -> kill -> reap (avoid leaving zombies behind).
         try:
             process.terminate()
             process.wait(timeout=cfg.stop_grace_seconds)
+            return
+        except subprocess.TimeoutExpired:
+            pass
         except Exception:
-            try:
-                process.kill()
-            except Exception:
-                pass
+            pass
+
+        try:
+            process.kill()
+        except Exception:
+            return
+
+        try:
+            process.wait(timeout=5)
+        except Exception:
+            # As a last resort, let the caller decide how to proceed.
+            pass
 
     def _run_command(self, task_id: int, command: list[str], cwd: str, timeout_seconds: int) -> None:
         process = subprocess.Popen(
@@ -446,7 +463,32 @@ class TaskWorker(threading.Thread):
                     self._terminate_process(process)
                     break
 
-            rc = process.wait(timeout=1)
+            # Ensure the process is reaped even after terminate/kill.
+            try:
+                rc = process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self._terminate_process(process)
+                try:
+                    rc = process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                    rc = process.wait()
+
+            # Drain any remaining buffered output quickly (best effort).
+            drain_deadline = time.monotonic() + 0.5
+            while time.monotonic() < drain_deadline:
+                try:
+                    item = q.get_nowait()
+                except queue.Empty:
+                    break
+                if item is None:
+                    break
+                if item:
+                    self._log(task_id, item.rstrip("\n"))
+
             if stopped:
                 raise RuntimeError("__TASK_STOPPED__")
             if timed_out:
@@ -515,7 +557,55 @@ class TaskWorker(threading.Thread):
         return matches[0] if matches else None
 
     def _collect_artifacts(self, task_root: Path) -> list[Path]:
-        files = [p for p in task_root.rglob("*") if p.is_file()]
+        """
+        Collect extra artifacts under task_root.
+
+        Notes:
+        - source/translated main outputs are already added explicitly; here we mainly pick up
+          manifest/logs and other useful files.
+        - avoid exposing hidden/temp/cache files, and cap the total count to keep the UI responsive.
+        """
+        max_extra = max(1, int(os.getenv("WEBUI_MAX_EXTRA_ARTIFACTS", "200")))
+        allowed_ext = {".log", ".json", ".txt", ".epub", ".md", ".pdf", ".srt"}
+        ignore_dirs = {"__pycache__", ".pytest_cache", ".cache", "cache", "tmp", "temp"}
+
+        scored: list[tuple[float, int, Path]] = []
+        for p in task_root.rglob("*"):
+            if not p.is_file():
+                continue
+
+            # never expose temp cookie files as downloadable artifacts
+            if p.name.startswith(".cookie_"):
+                continue
+
+            try:
+                rel = p.relative_to(task_root)
+            except ValueError:
+                # should not happen, but keep it safe
+                continue
+
+            # exclude hidden paths and common cache/temp folders
+            if any(part in ignore_dirs for part in rel.parts):
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+
+            # allowlist by file type/name
+            if p.name != "manifest.json" and p.suffix.lower() not in allowed_ext:
+                continue
+
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+
+            scored.append((float(st.st_mtime), int(st.st_size), p))
+
+        scored.sort(reverse=True)
+        if len(scored) > max_extra:
+            scored = scored[:max_extra]
+
+        files = [p for _, __, p in scored]
         return sorted(files)
 
     def _artifact_kind(self, file_path: Path) -> str:

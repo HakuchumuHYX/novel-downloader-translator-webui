@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,11 @@ from ..db import utcnow_iso
 
 
 TASK_LOG_MAX_LINES = max(100, int(os.getenv("WEBUI_TASK_LOG_MAX_LINES", "2000")))
+TASK_LOG_PRUNE_EVERY = max(1, int(os.getenv("WEBUI_TASK_LOG_PRUNE_EVERY", "50")))
+TASK_LOG_PRUNE_MIN_SECONDS = max(0.0, float(os.getenv("WEBUI_TASK_LOG_PRUNE_MIN_SECONDS", "2.0")))
+
+_LOG_PRUNE_LOCK = threading.Lock()
+_LOG_PRUNE_STATE: dict[int, tuple[float, int]] = {}
 
 
 def _iso_from_ts(ts: float) -> str:
@@ -160,25 +167,56 @@ def cancel_task(conn: sqlite3.Connection, task_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def _prune_task_logs(conn: sqlite3.Connection, task_id: int) -> None:
+    """
+    Keep only the newest TASK_LOG_MAX_LINES per task.
+
+    Implementation uses a cutoff id to avoid an expensive NOT IN subquery on every insert.
+    """
+    if TASK_LOG_MAX_LINES <= 0:
+        return
+    if TASK_LOG_MAX_LINES == 1:
+        # Keep only the newest row.
+        row = conn.execute(
+            "SELECT id FROM task_logs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if not row:
+            return
+        conn.execute("DELETE FROM task_logs WHERE task_id = ? AND id != ?", (task_id, int(row["id"])))
+        return
+
+    cutoff = conn.execute(
+        "SELECT id FROM task_logs WHERE task_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?",
+        (task_id, TASK_LOG_MAX_LINES - 1),
+    ).fetchone()
+    if not cutoff:
+        return
+    cutoff_id = int(cutoff["id"])
+    conn.execute("DELETE FROM task_logs WHERE task_id = ? AND id < ?", (task_id, cutoff_id))
+
+
 def append_log(conn: sqlite3.Connection, task_id: int, message: str, level: str = "info") -> None:
     conn.execute(
         "INSERT INTO task_logs(task_id, level, message, created_at) VALUES(?, ?, ?, ?)",
         (task_id, level, message, utcnow_iso()),
     )
-    conn.execute(
-        """
-        DELETE FROM task_logs
-        WHERE task_id = ?
-          AND id NOT IN (
-              SELECT id
-              FROM task_logs
-              WHERE task_id = ?
-              ORDER BY id DESC
-              LIMIT ?
-          )
-        """,
-        (task_id, task_id, TASK_LOG_MAX_LINES),
-    )
+
+    # Prune logs in batches to reduce write amplification.
+    # This is safe because logs are only used for UI display and are capped by TASK_LOG_MAX_LINES.
+    do_prune = False
+    now = time.monotonic()
+    with _LOG_PRUNE_LOCK:
+        last_prune_ts, since = _LOG_PRUNE_STATE.get(task_id, (0.0, 0))
+        since += 1
+        if since >= TASK_LOG_PRUNE_EVERY and (now - last_prune_ts) >= TASK_LOG_PRUNE_MIN_SECONDS:
+            do_prune = True
+            last_prune_ts = now
+            since = 0
+        _LOG_PRUNE_STATE[task_id] = (last_prune_ts, since)
+
+    if do_prune:
+        _prune_task_logs(conn, task_id)
 
 
 def get_logs_after(conn: sqlite3.Connection, task_id: int, offset: int) -> list[sqlite3.Row]:
@@ -308,17 +346,23 @@ def delete_cookie_profile(conn: sqlite3.Connection, profile_id: int) -> bool:
 
 
 def create_task_template(conn: sqlite3.Connection, name: str, payload: dict[str, Any]) -> int:
-    cur = conn.execute(
+    """
+    Upsert a task template and return its id.
+
+    Avoids depending on SQLite RETURNING for better compatibility with older SQLite versions.
+    """
+    conn.execute(
         """
         INSERT INTO task_templates(name, payload_json, created_at)
         VALUES(?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET payload_json = excluded.payload_json
-        RETURNING id
         """,
         (name, json.dumps(payload, ensure_ascii=False), utcnow_iso()),
     )
-    row = cur.fetchone()
-    return int(row[0])
+    row = conn.execute("SELECT id FROM task_templates WHERE name = ?", (name,)).fetchone()
+    if not row:
+        raise RuntimeError("failed to load task template id after upsert")
+    return int(row["id"])
 
 
 def list_task_templates(conn: sqlite3.Connection) -> list[sqlite3.Row]:

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -284,8 +286,12 @@ async def api_parse_cookie_json(request: Request, _: str = Depends(verify_basic_
 @app.post("/api/cookies")
 async def api_create_cookie_profile(request: Request, _: str = Depends(verify_basic_auth)) -> JSONResponse:
     inferred_site = ""
+    allow_insecure = False
+
     if request.headers.get("content-type", "").startswith("application/json"):
         data = await request.json()
+        allow_insecure = _parse_bool(data.get("allow_insecure"), default=False)
+
         payload = CookieProfileUpsertRequest.model_validate(data)
         name = payload.name.strip()
         site = payload.site.strip()
@@ -294,6 +300,8 @@ async def api_create_cookie_profile(request: Request, _: str = Depends(verify_ba
     else:
         form = await request.form()
         data = {k: v for k, v in form.items() if not isinstance(v, UploadFile)}
+        allow_insecure = _parse_bool(data.get("allow_insecure"), default=False)
+
         name = str(data.get("name", "")).strip()
         site = str(data.get("site", "")).strip()
         cookie_value = str(data.get("cookie", "")).strip()
@@ -321,6 +329,16 @@ async def api_create_cookie_profile(request: Request, _: str = Depends(verify_ba
 
     if not name or not cookie_value:
         raise HTTPException(status_code=400, detail="name and cookie are required (cookie text or json file)")
+
+    if not encryption_configured() and not allow_insecure:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "WEBUI_SECRET_KEY 未配置：为避免误以为 Cookie 已安全加密存储，默认禁止保存 Cookie 配置。请配置 WEBUI_SECRET_KEY 后重试；或勾选/确认“仍要以不安全回退密钥保存”。",
+                "encryption_configured": False,
+                "allow_insecure_supported": True,
+            },
+        )
 
     try:
         cookie_enc = encrypt_text(cookie_value)
@@ -521,6 +539,65 @@ def api_task_logs(task_id: int, offset: int = Query(default=0), _: str = Depends
     items = [_row_to_dict(row) for row in logs]
     next_offset = items[-1]["id"] if items else offset
     return JSONResponse({"items": items, "next_offset": next_offset})
+
+
+@app.get("/api/tasks/{task_id}/logs/stream")
+async def api_task_logs_stream(
+    task_id: int,
+    request: Request,
+    offset: int = Query(default=0, ge=0),
+    _: str = Depends(verify_basic_auth),
+) -> StreamingResponse:
+    """
+    SSE stream for task logs.
+
+    Sends one event per log line:
+      data: {"id":..., "created_at":..., "level":..., "message":...}
+
+    Client can reconnect with last seen offset to resume.
+    """
+
+    async def _gen():
+        nonlocal offset
+        last_ping = time.monotonic()
+
+        # initial comment to establish the stream
+        yield ": ok\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            with get_conn() as conn:
+                rows = get_logs_after(conn, task_id, offset)
+
+            if rows:
+                for row in rows:
+                    payload = {
+                        "id": int(row["id"]),
+                        "created_at": row["created_at"],
+                        "level": row["level"],
+                        "message": row["message"],
+                    }
+                    offset = int(row["id"])
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                last_ping = time.monotonic()
+            else:
+                now = time.monotonic()
+                if now - last_ping >= 10.0:
+                    yield ": ping\n\n"
+                    last_ping = now
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # for nginx proxies
+        },
+    )
 
 
 @app.post("/api/tasks/{task_id}/retry")

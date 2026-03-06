@@ -72,7 +72,7 @@
     <label class="checkbox"><input type="checkbox" name="record_chapter_number"> 记录章节序号</label>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="translate_panel">
     <h2>翻译参数</h2>
     <label>任务模式
       <select name="mode" id="mode">
@@ -80,20 +80,21 @@
         <option value="download_only">仅下载</option>
       </select>
     </label>
+    <p id="mode_hint" class="hint"></p>
     <label>翻译模式
-      <select name="translate_mode">
+      <select name="translate_mode" id="translate_mode">
         <option value="preview">预览（test）</option>
         <option value="full">全量</option>
       </select>
     </label>
     <label>翻译输出偏好
-      <select name="translation_output_mode">
+      <select name="translation_output_mode" id="translation_output_mode">
         <option value="translated_only" selected>仅译文</option>
         <option value="bilingual">原文 + 译文</option>
       </select>
     </label>
     <label>预览条数（test_num）
-      <input type="number" name="test_num" value="{{ settings.test_num }}">
+      <input type="number" name="test_num" id="test_num" value="{{ settings.test_num }}">
     </label>
   </section>
 
@@ -171,6 +172,13 @@
   const cookieProfile = document.getElementById('cookie_profile_id');
   const sourceHint = document.getElementById('source_hint');
 
+  const modeSelect = document.getElementById('mode');
+  const translatePanel = document.getElementById('translate_panel');
+  const modeHint = document.getElementById('mode_hint');
+  const translateMode = document.getElementById('translate_mode');
+  const translationOutputMode = document.getElementById('translation_output_mode');
+  const testNum = document.getElementById('test_num');
+
   function syncSourceUI() {
     const t = sourceType.value;
 
@@ -198,8 +206,27 @@
     }
   }
 
+  function syncModeUI() {
+    const mode = modeSelect.value;
+
+    if (mode === 'download_only') {
+      modeHint.textContent = '仅下载模式将跳过翻译步骤，下面翻译相关选项将被禁用。';
+      translateMode.disabled = true;
+      translationOutputMode.disabled = true;
+      testNum.disabled = true;
+      return;
+    }
+
+    modeHint.textContent = '下载并翻译：下载完成后自动进行翻译。';
+    translateMode.disabled = false;
+    translationOutputMode.disabled = false;
+    testNum.disabled = false;
+  }
+
   sourceType.addEventListener('change', syncSourceUI);
+  modeSelect.addEventListener('change', syncModeUI);
   syncSourceUI();
+  syncModeUI();
 
   document.getElementById('task-form').addEventListener('submit', async (e) => {
     e.preventDefault();
