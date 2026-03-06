@@ -44,13 +44,21 @@ def create_epub_from_txt(file_path, output_folder):
 
 
 def merge_txt_files(input_dir, merged_filename="full_book.txt"):
-    txt_files = sorted(
-        [
-            f for f in os.listdir(input_dir)
-            if f.endswith(".txt") and f != merged_filename
-        ]
-    )
+    all_txt_files = sorted([f for f in os.listdir(input_dir) if f.endswith(".txt")])
+    if not all_txt_files:
+        raise FileNotFoundError(f"No txt files found in {input_dir}")
+
+    # Special case:
+    # When there's only ONE txt file and its name is exactly the merged output filename,
+    # there is nothing to merge. Just return it.
+    if len(all_txt_files) == 1 and all_txt_files[0] == merged_filename:
+        return os.path.join(input_dir, merged_filename)
+
+    txt_files = [f for f in all_txt_files if f != merged_filename]
     if not txt_files:
+        merged_path = os.path.join(input_dir, merged_filename)
+        if os.path.exists(merged_path):
+            return merged_path
         raise FileNotFoundError(f"No txt files found in {input_dir}")
 
     merged_path = os.path.join(input_dir, merged_filename)
