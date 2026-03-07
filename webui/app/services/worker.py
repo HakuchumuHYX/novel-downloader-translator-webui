@@ -49,6 +49,8 @@ class TaskWorker(threading.Thread):
         # Throttle high-frequency progress events to avoid hammering SQLite.
         self._progress_lock = threading.Lock()
         self._progress_state: dict[int, tuple[float, dict[str, Any]]] = {}
+        # Keep the latest progress event even if throttled, then flush it when command exits.
+        self._progress_latest: dict[int, dict[str, Any]] = {}
         self._progress_min_interval_seconds = float(os.getenv("WEBUI_PROGRESS_MIN_INTERVAL_SECONDS", "0.5"))
 
     def stop(self) -> None:
@@ -581,6 +583,9 @@ class TaskWorker(threading.Thread):
         with self._proc_lock:
             self._running.pop(task_id, None)
             self._terminate_reason.pop(task_id, None)
+        with self._progress_lock:
+            self._progress_state.pop(task_id, None)
+            self._progress_latest.pop(task_id, None)
         with get_conn() as conn:
             set_task_pid(conn, task_id, None)
 
@@ -629,16 +634,7 @@ class TaskWorker(threading.Thread):
 
         _wait(5.0)
 
-    def _maybe_update_progress_throttled(self, task_id: int, evt: dict[str, Any]) -> None:
-        now = time.monotonic()
-        with self._progress_lock:
-            last_ts, last_evt = self._progress_state.get(task_id, (0.0, {}))
-            if evt == last_evt and (now - last_ts) < (self._progress_min_interval_seconds * 4):
-                return
-            if (now - last_ts) < self._progress_min_interval_seconds:
-                return
-            self._progress_state[task_id] = (now, dict(evt))
-
+    def _apply_progress_event_to_db(self, task_id: int, evt: dict[str, Any]) -> None:
         stage = str(evt.get("stage") or "").strip()
         cur = evt.get("current")
         total = evt.get("total")
@@ -668,6 +664,31 @@ class TaskWorker(threading.Thread):
                 kwargs.pop("translate_total", None)
 
             update_task_progress(conn, task_id, **kwargs)
+
+    def _maybe_update_progress_throttled(self, task_id: int, evt: dict[str, Any]) -> None:
+        now = time.monotonic()
+        evt_copy = dict(evt)
+
+        with self._progress_lock:
+            self._progress_latest[task_id] = evt_copy
+            last_ts, last_evt = self._progress_state.get(task_id, (0.0, {}))
+            if evt_copy == last_evt and (now - last_ts) < (self._progress_min_interval_seconds * 4):
+                return
+            if (now - last_ts) < self._progress_min_interval_seconds:
+                return
+            self._progress_state[task_id] = (now, evt_copy)
+
+        self._apply_progress_event_to_db(task_id, evt_copy)
+
+    def _flush_latest_progress(self, task_id: int) -> None:
+        with self._progress_lock:
+            evt = self._progress_latest.get(task_id)
+            if not evt:
+                return
+            evt_copy = dict(evt)
+            self._progress_state[task_id] = (time.monotonic(), evt_copy)
+
+        self._apply_progress_event_to_db(task_id, evt_copy)
 
     def _run_command(self, task_id: int, command: list[str], cwd: str, timeout_seconds: int) -> None:
         process = subprocess.Popen(
@@ -806,7 +827,10 @@ class TaskWorker(threading.Thread):
             if rc != 0:
                 raise RuntimeError(f"Command failed with exit code {rc}: {self._redact_command(command)}")
         finally:
-            self._unregister_process(task_id)
+            try:
+                self._flush_latest_progress(task_id)
+            finally:
+                self._unregister_process(task_id)
 
     def _redact_command(self, command: list[str]) -> str:
         sensitive_flags = {
