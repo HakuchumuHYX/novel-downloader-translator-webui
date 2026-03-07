@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,3 +25,17 @@ class CookieProfileUpsertRequest(BaseModel):
 class TaskTemplateCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     payload: dict[str, Any]
+
+
+class TaskPurgeRequest(BaseModel):
+    scope: Literal["downloads", "task_dir"] = "downloads"
+    delete_upload: bool = False
+    force: bool = False
+
+
+class TaskBatchActionRequest(BaseModel):
+    task_ids: list[int] = Field(default_factory=list)
+    scope: Literal["downloads", "task_dir"] = "downloads"
+    delete_upload: bool = False
+    force: bool = False
+    cascade: bool = False

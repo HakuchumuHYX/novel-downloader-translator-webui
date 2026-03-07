@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>任务管理</h1>
+
+<section class="panel">
+    <h2>批量操作</h2>
+    <div class="actions">
+        <button class="btn-danger" onclick="batchDelete()">批量删除任务（含任务目录）</button>
+        <button class="btn-warn" onclick="batchPurgeDownloads()">批量清理下载目录</button>
+        <button class="btn-warn" onclick="batchPurgeTaskDir()">批量清理整个任务目录</button>
+    </div>
+    <div class="actions">
+        <label class="checkbox"><input type="checkbox" id="force-flag"> 对 queued/paused 任务启用 force</label>
+        <label class="checkbox"><input type="checkbox" id="cascade-flag" checked> 包含子任务（删除任务树）</label>
+        <label class="checkbox"><input type="checkbox" id="delete-upload-flag"> 同时删除 upload 文件（仅 upload_root 内）</label>
+    </div>
+    <p class="hint">运行中任务不允许批量删除/清理。建议先进入详情页停止任务。</p>
+</section>
+
+<section class="panel">
+    <h2>任务列表（最近 500 条）</h2>
+    <div class="actions">
+        <button onclick="selectAll(true)">全选</button>
+        <button onclick="selectAll(false)">取消全选</button>
+        <button onclick="refreshTasks()">刷新</button>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="check-all" onchange="toggleAllFromHeader(this)"></th>
+                <th>ID</th>
+                <th>状态</th>
+                <th>来源</th>
+                <th>模式</th>
+                <th>创建时间</th>
+                <th>详情</th>
+            </tr>
+        </thead>
+        <tbody id="task-table-body">
+            {% for t in tasks %}
+            <tr>
+                <td><input type="checkbox" class="task-check" value="{{ t.id }}"></td>
+                <td>{{ t.id }}</td>
+                <td>
+                    <span class="status status-{{ t.status }}">
+                        {% if t.status == 'queued' %}排队中
+                        {% elif t.status == 'running' %}运行中
+                        {% elif t.status == 'paused' %}已暂停
+                        {% elif t.status == 'succeeded' %}成功
+                        {% elif t.status == 'failed' %}失败
+                        {% elif t.status == 'canceled' %}已取消
+                        {% else %}{{ t.status }}
+                        {% endif %}
+                    </span>
+                </td>
+                <td>{{ t.source_type }}</td>
+                <td>{{ t.mode }}</td>
+                <td>{{ t.created_at }}</td>
+                <td><a href="/tasks/{{ t.id }}">查看</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="panel">
+    <h2>执行结果</h2>
+    <pre id="result-box" class="logs"></pre>
+</section>
+
+<script>
+    function getSelectedTaskIds() {
+        const checks = document.querySelectorAll('.task-check:checked');
+        const ids = [];
+        for (const c of checks) {
+            const id = Number(c.value);
+            if (Number.isFinite(id) && id > 0) ids.push(id);
+        }
+        return ids;
+    }
+
+    function selectAll(checked) {
+        const checks = document.querySelectorAll('.task-check');
+        for (const c of checks) c.checked = checked;
+        const head = document.getElementById('check-all');
+        if (head) head.checked = checked;
+    }
+
+    function toggleAllFromHeader(el) {
+        selectAll(Boolean(el?.checked));
+    }
+
+    function showResult(obj) {
+        const box = document.getElementById('result-box');
+        box.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+    }
+
+    async function readResponseData(resp) {
+        const text = await resp.text();
+        if (!text) return {};
+        try {
+            return JSON.parse(text);
+        } catch (_) {
+            return { detail: text };
+        }
+    }
+
+    async function postJson(url, payload) {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await readResponseData(resp);
+        if (!resp.ok) {
+            const detail = data.detail || `HTTP ${resp.status}`;
+            throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2));
+        }
+        return data;
+    }
+
+    async function refreshTasks() {
+        const resp = await fetch('/api/tasks');
+        if (!resp.ok) {
+            showResult(`刷新失败: HTTP ${resp.status}`);
+            return;
+        }
+
+        const data = await resp.json();
+        const body = document.getElementById('task-table-body');
+        body.innerHTML = '';
+
+        for (const t of data.items || []) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+        <td><input type="checkbox" class="task-check" value="${t.id}"></td>
+        <td>${t.id}</td>
+        <td><span class="status status-${t.status}">${t.status}</span></td>
+        <td>${t.source_type || ''}</td>
+        <td>${t.mode || ''}</td>
+        <td>${t.created_at || ''}</td>
+        <td><a href="/tasks/${t.id}">查看</a></td>
+      `;
+            body.appendChild(tr);
+        }
+    }
+
+    async function batchDelete() {
+        const taskIds = getSelectedTaskIds();
+        if (taskIds.length === 0) {
+            alert('请先选择任务');
+            return;
+        }
+        if (!confirm(`确定删除 ${taskIds.length} 个任务吗？该操作不可恢复。`)) return;
+
+        try {
+            const data = await postJson('/api/tasks/manage/batch-delete', {
+                task_ids: taskIds,
+                delete_upload: document.getElementById('delete-upload-flag').checked,
+                force: document.getElementById('force-flag').checked,
+                cascade: document.getElementById('cascade-flag').checked,
+            });
+            showResult(data);
+            await refreshTasks();
+        } catch (err) {
+            alert(`批量删除失败: ${String(err)}`);
+        }
+    }
+
+    async function batchPurgeDownloads() {
+        await batchPurge('downloads');
+    }
+
+    async function batchPurgeTaskDir() {
+        await batchPurge('task_dir');
+    }
+
+    async function batchPurge(scope) {
+        const taskIds = getSelectedTaskIds();
+        if (taskIds.length === 0) {
+            alert('请先选择任务');
+            return;
+        }
+        if (!confirm(`确定清理 ${taskIds.length} 个任务的 ${scope} 数据吗？`)) return;
+
+        try {
+            const data = await postJson('/api/tasks/manage/batch-purge', {
+                task_ids: taskIds,
+                scope,
+                delete_upload: document.getElementById('delete-upload-flag').checked,
+                force: document.getElementById('force-flag').checked,
+            });
+            showResult(data);
+            await refreshTasks();
+        } catch (err) {
+            alert(`批量清理失败: ${String(err)}`);
+        }
+    }
+</script>
+{% endblock %}

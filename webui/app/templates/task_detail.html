@@ -48,6 +48,18 @@
       <button id="resume-btn" onclick="resumeTask()">继续</button>
       <button id="stop-btn" onclick="stopTask()">停止运行中任务</button>
     </div>
+
+    <h3>危险操作</h3>
+    <div class="actions">
+      <label class="checkbox"><input type="checkbox" id="force-manage"> 对 queued/paused 启用 force</label>
+      <label class="checkbox"><input type="checkbox" id="cascade-manage" checked> 删除时包含子任务（任务树）</label>
+      <label class="checkbox"><input type="checkbox" id="delete-upload"> 同时删除 upload 文件</label>
+    </div>
+    <div class="actions">
+      <button class="btn-warn" onclick="purgeTaskDownloads()">清理下载目录（保留任务）</button>
+      <button class="btn-warn" onclick="purgeTaskDir()">清理整个任务目录（保留任务）</button>
+      <button class="btn-danger" onclick="deleteTaskRecord()">删除任务（默认含任务目录）</button>
+    </div>
   </section>
 
   <section class="panel">
@@ -353,6 +365,75 @@
       alert(`停止失败: ${String(err)}`);
     } finally {
       await refreshTask();
+    }
+  }
+
+  function manageFlags() {
+    return {
+      force: document.getElementById('force-manage')?.checked ? true : false,
+      cascade: document.getElementById('cascade-manage')?.checked ? true : false,
+      deleteUpload: document.getElementById('delete-upload')?.checked ? true : false,
+    };
+  }
+
+  async function purgeTask(scope) {
+    const label = scope === 'task_dir' ? '整个任务目录' : '下载目录';
+    if (!confirm(`确定清理${label}吗？任务记录会保留。`)) return;
+
+    const flags = manageFlags();
+
+    try {
+      const resp = await fetch('/api/tasks/{{ task.id }}/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope,
+          delete_upload: flags.deleteUpload,
+          force: flags.force,
+        })
+      });
+      const data = await readResponseData(resp);
+      if (!resp.ok) {
+        const detail = data.detail || `HTTP ${resp.status}`;
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2));
+      }
+      alert(`清理成功: ${JSON.stringify(data)}`);
+    } catch (err) {
+      alert(`清理失败: ${String(err)}`);
+    } finally {
+      await refreshTask();
+    }
+  }
+
+  async function purgeTaskDownloads() {
+    await purgeTask('downloads');
+  }
+
+  async function purgeTaskDir() {
+    await purgeTask('task_dir');
+  }
+
+  async function deleteTaskRecord() {
+    if (!confirm('确定删除该任务吗？该操作不可恢复。')) return;
+
+    const flags = manageFlags();
+    const params = new URLSearchParams({
+      force: flags.force ? 'true' : 'false',
+      cascade: flags.cascade ? 'true' : 'false',
+      delete_task_dir: 'true',
+      delete_upload: flags.deleteUpload ? 'true' : 'false',
+    });
+
+    try {
+      const resp = await fetch(`/api/tasks/{{ task.id }}?${params.toString()}`, { method: 'DELETE' });
+      const data = await readResponseData(resp);
+      if (!resp.ok) {
+        const detail = data.detail || `HTTP ${resp.status}`;
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2));
+      }
+      window.location.href = '/tasks/manage';
+    } catch (err) {
+      alert(`删除失败: ${String(err)}`);
     }
   }
 

@@ -473,3 +473,49 @@ def list_task_templates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def get_task_template(conn: sqlite3.Connection, template_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM task_templates WHERE id = ?", (template_id,)).fetchone()
+
+
+def delete_task(conn: sqlite3.Connection, task_id: int) -> bool:
+    cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    return cur.rowcount > 0
+
+
+def clear_task_output_paths(conn: sqlite3.Connection, task_id: int) -> None:
+    conn.execute(
+        """
+        UPDATE tasks
+        SET download_output_dir = '',
+            source_full_book_path = '',
+            translated_output_path = ''
+        WHERE id = ?
+        """,
+        (task_id,),
+    )
+
+
+def list_tasks_by_ids(conn: sqlite3.Connection, task_ids: list[int]) -> list[sqlite3.Row]:
+    if not task_ids:
+        return []
+    placeholders = ",".join(["?"] * len(task_ids))
+    return conn.execute(f"SELECT * FROM tasks WHERE id IN ({placeholders}) ORDER BY id DESC", tuple(task_ids)).fetchall()
+
+
+def list_task_descendants(conn: sqlite3.Connection, task_id: int) -> list[int]:
+    rows = conn.execute(
+        """
+        WITH RECURSIVE tree(id, depth) AS (
+            SELECT id, 1
+            FROM tasks
+            WHERE parent_task_id = ?
+            UNION ALL
+            SELECT t.id, tree.depth + 1
+            FROM tasks t
+            JOIN tree ON t.parent_task_id = tree.id
+        )
+        SELECT id
+        FROM tree
+        ORDER BY depth DESC, id DESC
+        """,
+        (task_id,),
+    ).fetchall()
+    return [int(row["id"]) for row in rows]

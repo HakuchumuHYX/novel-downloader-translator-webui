@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sqlite3
 import time
 import uuid
@@ -20,6 +21,8 @@ from .schemas import (
     CookieJsonParseRequest,
     CookieProfileUpsertRequest,
     EnvImportRequest,
+    TaskBatchActionRequest,
+    TaskPurgeRequest,
     TaskTemplateCreateRequest,
 )
 from .security import encrypt_text, encryption_configured, verify_basic_auth
@@ -43,11 +46,14 @@ from .services.settings_service import (
 )
 from .services.task_service import (
     cancel_task,
+    clear_artifacts,
+    clear_task_output_paths,
     count_cookie_profile_task_refs,
     create_or_update_cookie_profile,
     create_task,
     create_task_template,
     delete_cookie_profile,
+    delete_task as delete_task_row,
     detach_cookie_profile_from_non_running_tasks,
     get_artifact,
     get_logs_after,
@@ -57,6 +63,8 @@ from .services.task_service import (
     list_cookie_profiles,
     list_task_templates,
     list_tasks,
+    list_tasks_by_ids,
+    list_task_descendants,
     resume_task,
 )
 from .services.worker import TaskWorker
@@ -156,6 +164,45 @@ def _task_parallel_workers(task_row: Any, base_settings: dict[str, str] | None =
         return fallback
 
 
+def _safe_delete_dir(target: Path, root: Path) -> bool:
+    target = target.resolve()
+    root = root.resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Refusing to delete path outside allowed root: {target}") from exc
+
+    if not target.exists():
+        return False
+    if target.is_dir():
+        shutil.rmtree(target, ignore_errors=True)
+        return True
+    target.unlink(missing_ok=True)
+    return True
+
+
+def _safe_delete_upload_file(path_str: str) -> bool:
+    if not path_str.strip():
+        return False
+    target = Path(path_str).resolve()
+    try:
+        target.relative_to(cfg.upload_root.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="upload path is outside upload root") from exc
+    if not target.exists() or not target.is_file():
+        return False
+    target.unlink(missing_ok=True)
+    return True
+
+
+def _can_manage_task(status: str, force: bool) -> tuple[bool, str]:
+    if status == "running":
+        return False, "running task cannot be managed directly; stop it first"
+    if status in {"queued", "paused"} and not force:
+        return False, "queued/paused task requires force=true"
+    return True, ""
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, _: str = Depends(verify_basic_auth)) -> HTMLResponse:
     with get_conn() as conn:
@@ -180,6 +227,13 @@ def new_task_page(request: Request, _: str = Depends(verify_basic_auth)) -> HTML
             "source_types": sorted(SOURCE_TYPES),
         },
     )
+
+
+@app.get("/tasks/manage", response_class=HTMLResponse)
+def tasks_manage_page(request: Request, _: str = Depends(verify_basic_auth)) -> HTMLResponse:
+    with get_conn() as conn:
+        tasks = [_row_to_dict(row) for row in list_tasks(conn, limit=500)]
+    return templates.TemplateResponse(request, "task_manage.html", {"tasks": tasks})
 
 
 @app.get("/tasks/{task_id}", response_class=HTMLResponse)
@@ -566,6 +620,286 @@ def api_get_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONRespo
     data["parallel_workers"] = _task_parallel_workers(row, settings)
     data["artifacts"] = artifacts
     return JSONResponse(data)
+
+
+@app.post("/api/tasks/{task_id}/purge")
+async def api_purge_task(
+    task_id: int,
+    request: Request,
+    _: str = Depends(verify_basic_auth),
+) -> JSONResponse:
+    if request.headers.get("content-type", "").startswith("application/json"):
+        body = await request.json()
+        payload = TaskPurgeRequest.model_validate(body)
+    else:
+        form = await request.form()
+        payload = TaskPurgeRequest.model_validate(
+            {
+                "scope": str(form.get("scope", "downloads")).strip() or "downloads",
+                "delete_upload": _parse_bool(form.get("delete_upload", False), default=False),
+                "force": _parse_bool(form.get("force", False), default=False),
+            }
+        )
+
+    with get_conn() as conn:
+        row = get_task(conn, task_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        can_manage, reason = _can_manage_task(str(row["status"]), force=payload.force)
+        if not can_manage:
+            raise HTTPException(status_code=409, detail=reason)
+
+        clear_artifacts(conn, task_id)
+        clear_task_output_paths(conn, task_id)
+        upload_path = str(row["upload_path"] or "")
+
+    task_root = cfg.task_root / str(task_id)
+    deleted_paths: list[str] = []
+
+    if payload.scope == "task_dir":
+        if _safe_delete_dir(task_root, cfg.task_root):
+            deleted_paths.append(str(task_root))
+    else:
+        downloads_dir = task_root / "downloads"
+        if _safe_delete_dir(downloads_dir, cfg.task_root):
+            deleted_paths.append(str(downloads_dir))
+
+    deleted_upload = False
+    if payload.delete_upload:
+        deleted_upload = _safe_delete_upload_file(upload_path)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "task_id": task_id,
+            "scope": payload.scope,
+            "deleted_paths": deleted_paths,
+            "deleted_upload": deleted_upload,
+        }
+    )
+
+
+@app.delete("/api/tasks/{task_id}")
+def api_delete_task(
+    task_id: int,
+    force: bool = Query(default=False),
+    delete_task_dir: bool = Query(default=True),
+    delete_upload: bool = Query(default=False),
+    cascade: bool = Query(default=False),
+    _: str = Depends(verify_basic_auth),
+) -> JSONResponse:
+    deleted_ids: list[int] = []
+    upload_paths: list[str] = []
+
+    with get_conn() as conn:
+        row = get_task(conn, task_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        target_rows: list[Any] = [row]
+        if cascade:
+            descendant_ids = list_task_descendants(conn, task_id)
+            if descendant_ids:
+                descendant_rows = list_tasks_by_ids(conn, descendant_ids)
+                target_rows.extend(descendant_rows)
+
+        for t in target_rows:
+            can_manage, reason = _can_manage_task(str(t["status"]), force=force)
+            if not can_manage:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"task {int(t['id'])} cannot be deleted: {reason}",
+                )
+
+        if cascade:
+            delete_order = [int(t["id"]) for t in target_rows if int(t["id"]) != task_id]
+            delete_order.sort(reverse=True)
+            delete_order.append(task_id)
+        else:
+            delete_order = [task_id]
+
+        for tid in delete_order:
+            trow = get_task(conn, tid)
+            if not trow:
+                continue
+            upload_paths.append(str(trow["upload_path"] or ""))
+            deleted = delete_task_row(conn, tid)
+            if deleted:
+                deleted_ids.append(tid)
+
+    if not deleted_ids:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    deleted_paths: list[str] = []
+    if delete_task_dir:
+        for tid in deleted_ids:
+            task_root = cfg.task_root / str(tid)
+            if _safe_delete_dir(task_root, cfg.task_root):
+                deleted_paths.append(str(task_root))
+
+    deleted_upload_count = 0
+    if delete_upload:
+        for up in upload_paths:
+            if _safe_delete_upload_file(up):
+                deleted_upload_count += 1
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "deleted_id": task_id,
+            "deleted_ids": sorted(set(deleted_ids)),
+            "deleted_paths": deleted_paths,
+            "deleted_upload_count": deleted_upload_count,
+            "cascade": cascade,
+        }
+    )
+
+
+@app.post("/api/tasks/manage/batch-purge")
+async def api_batch_purge_tasks(
+    request: Request,
+    _: str = Depends(verify_basic_auth),
+) -> JSONResponse:
+    body = await request.json()
+    payload = TaskBatchActionRequest.model_validate(body)
+
+    task_ids = sorted({int(tid) for tid in payload.task_ids if int(tid) > 0})
+    if not task_ids:
+        raise HTTPException(status_code=400, detail="task_ids is required")
+
+    with get_conn() as conn:
+        rows = list_tasks_by_ids(conn, task_ids)
+        row_map = {int(row["id"]): row for row in rows}
+
+    deleted_count = 0
+    errors: list[dict[str, Any]] = []
+
+    for task_id in task_ids:
+        row = row_map.get(task_id)
+        if not row:
+            errors.append({"task_id": task_id, "reason": "not found"})
+            continue
+
+        can_manage, reason = _can_manage_task(str(row["status"]), force=payload.force)
+        if not can_manage:
+            errors.append({"task_id": task_id, "reason": reason})
+            continue
+
+        task_root = cfg.task_root / str(task_id)
+        try:
+            if payload.scope == "task_dir":
+                _safe_delete_dir(task_root, cfg.task_root)
+            else:
+                _safe_delete_dir(task_root / "downloads", cfg.task_root)
+
+            if payload.delete_upload:
+                _safe_delete_upload_file(str(row["upload_path"] or ""))
+
+            with get_conn() as conn:
+                clear_artifacts(conn, task_id)
+                clear_task_output_paths(conn, task_id)
+
+            deleted_count += 1
+        except HTTPException as exc:
+            errors.append({"task_id": task_id, "reason": str(exc.detail)})
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"task_id": task_id, "reason": str(exc)})
+
+    return JSONResponse({"ok": True, "processed": len(task_ids), "succeeded": deleted_count, "errors": errors})
+
+
+@app.post("/api/tasks/manage/batch-delete")
+async def api_batch_delete_tasks(
+    request: Request,
+    _: str = Depends(verify_basic_auth),
+) -> JSONResponse:
+    body = await request.json()
+    payload = TaskBatchActionRequest.model_validate(body)
+
+    task_ids = sorted({int(tid) for tid in payload.task_ids if int(tid) > 0})
+    if not task_ids:
+        raise HTTPException(status_code=400, detail="task_ids is required")
+
+    deleted_count = 0
+    deleted_task_ids: list[int] = []
+    errors: list[dict[str, Any]] = []
+
+    for task_id in task_ids:
+        try:
+            with get_conn() as conn:
+                row = get_task(conn, task_id)
+                if not row:
+                    errors.append({"task_id": task_id, "reason": "not found"})
+                    continue
+
+                target_rows: list[Any] = [row]
+                if payload.cascade:
+                    descendant_ids = list_task_descendants(conn, task_id)
+                    if descendant_ids:
+                        target_rows.extend(list_tasks_by_ids(conn, descendant_ids))
+
+                blocked = None
+                for t in target_rows:
+                    can_manage, reason = _can_manage_task(str(t["status"]), force=payload.force)
+                    if not can_manage:
+                        blocked = {"task_id": int(t["id"]), "reason": reason}
+                        break
+                if blocked:
+                    errors.append(
+                        {
+                            "task_id": task_id,
+                            "reason": f"blocked by task {blocked['task_id']}: {blocked['reason']}",
+                        }
+                    )
+                    continue
+
+                if payload.cascade:
+                    delete_order = [int(t["id"]) for t in target_rows if int(t["id"]) != task_id]
+                    delete_order.sort(reverse=True)
+                    delete_order.append(task_id)
+                else:
+                    delete_order = [task_id]
+
+                per_deleted: list[int] = []
+                upload_paths: list[str] = []
+                for tid in delete_order:
+                    trow = get_task(conn, tid)
+                    if not trow:
+                        continue
+                    upload_paths.append(str(trow["upload_path"] or ""))
+                    if delete_task_row(conn, tid):
+                        per_deleted.append(tid)
+
+            if not per_deleted:
+                errors.append({"task_id": task_id, "reason": "delete returned false"})
+                continue
+
+            for tid in per_deleted:
+                _safe_delete_dir(cfg.task_root / str(tid), cfg.task_root)
+            if payload.delete_upload:
+                for up in upload_paths:
+                    _safe_delete_upload_file(up)
+
+            deleted_count += 1
+            deleted_task_ids.extend(per_deleted)
+        except sqlite3.IntegrityError:
+            errors.append({"task_id": task_id, "reason": "has child tasks (use cascade=true)"})
+        except HTTPException as exc:
+            errors.append({"task_id": task_id, "reason": str(exc.detail)})
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"task_id": task_id, "reason": str(exc)})
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "processed": len(task_ids),
+            "succeeded": deleted_count,
+            "deleted_task_ids": sorted(set(deleted_task_ids)),
+            "cascade": payload.cascade,
+            "errors": errors,
+        }
+    )
 
 
 @app.get("/api/tasks/{task_id}/logs")

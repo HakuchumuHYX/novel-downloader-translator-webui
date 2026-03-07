@@ -9,13 +9,17 @@
   --border: #e5d8c3;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   font-family: "Noto Sans", "Segoe UI", sans-serif;
   background: radial-gradient(circle at top, #fff6e8, var(--bg));
   color: var(--text);
 }
+
 .topbar {
   display: flex;
   justify-content: space-between;
@@ -24,9 +28,23 @@ body {
   background: #1f2329;
   color: #fff;
 }
-.topbar a { color: #fff; margin-left: 12px; text-decoration: none; }
-.brand { font-weight: 700; }
-.container { max-width: 1180px; margin: 20px auto; padding: 0 12px; }
+
+.topbar a {
+  color: #fff;
+  margin-left: 12px;
+  text-decoration: none;
+}
+
+.brand {
+  font-weight: 700;
+}
+
+.container {
+  max-width: 1180px;
+  margin: 20px auto;
+  padding: 0 12px;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -34,25 +52,67 @@ body {
   padding: 12px;
   margin-bottom: 14px;
 }
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.split-preview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-@media (max-width: 900px) {
-  .grid { grid-template-columns: 1fr; }
-  .two-col { grid-template-columns: 1fr; }
-  .split-preview-grid { grid-template-columns: 1fr; }
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
-h1, h2, h3 { margin-top: 0; }
-label { display: block; margin: 8px 0; font-size: 14px; }
-input, select, textarea {
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.split-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .split-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+h1,
+h2,
+h3 {
+  margin-top: 0;
+}
+
+label {
+  display: block;
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+input,
+select,
+textarea {
   width: 100%;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: #fff;
 }
-textarea { resize: vertical; }
-.btn, button {
+
+textarea {
+  resize: vertical;
+}
+
+.btn,
+button {
   background: var(--accent);
   color: #fff;
   border: none;
@@ -61,22 +121,84 @@ textarea { resize: vertical; }
   text-decoration: none;
   cursor: pointer;
 }
-.actions { margin: 8px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.status { padding: 2px 8px; border-radius: 999px; color: #fff; }
-.status-succeeded { background: var(--ok); }
-.status-failed { background: var(--bad); }
-.status-running { background: var(--warn); }
-.status-queued { background: #4a5c80; }
-.status-canceled { background: #555; }
 
-.danger { color: var(--bad); font-weight: 700; }
+.actions {
+  margin: 8px 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
 
-.checkbox { display: flex; align-items: center; gap: 8px; }
-.checkbox input { width: auto; }
+.status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+}
 
-table { width: 100%; border-collapse: collapse; }
-th, td { border-bottom: 1px solid var(--border); text-align: left; padding: 6px; }
-.logs, .preview {
+.status-succeeded {
+  background: var(--ok);
+}
+
+.status-failed {
+  background: var(--bad);
+}
+
+.status-running {
+  background: var(--warn);
+}
+
+.status-queued {
+  background: #4a5c80;
+}
+
+.status-canceled {
+  background: #555;
+}
+
+.status-paused {
+  background: #6a4c93;
+}
+
+.btn-danger {
+  background: var(--bad);
+  color: #fff;
+}
+
+.btn-warn {
+  background: var(--warn);
+  color: #fff;
+}
+
+.danger {
+  color: var(--bad);
+  font-weight: 700;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox input {
+  width: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 6px;
+}
+
+.logs,
+.preview {
   max-height: 560px;
   overflow: auto;
   background: #0b1020;
@@ -85,4 +207,7 @@ th, td { border-bottom: 1px solid var(--border); text-align: left; padding: 6px;
   border-radius: 6px;
   line-height: 1.45;
 }
-.hint { color: #4d5968; }
+
+.hint {
+  color: #4d5968;
+}
