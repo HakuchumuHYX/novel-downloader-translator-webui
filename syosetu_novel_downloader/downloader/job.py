@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from .adapters import NativeFallbackAdapter, NodeNovelAdapter
+from .adapters import NativeFallbackAdapter, NativeKakuyomuAdapter, NodeNovelAdapter
 from .models import DownloadOptions, DownloadResult, RunManifest
 from .utils import detect_site_from_url, sanitize_filename, write_manifest
 
@@ -91,17 +91,19 @@ class DownloadJob:
     def _build_adapter_chain(self, site: str):
         if self.options.backend == "node":
             return [NodeNovelAdapter()]
+
         if self.options.backend == "native":
+            if site == "kakuyomu":
+                return [NativeKakuyomuAdapter()]
             return [NativeFallbackAdapter()]
 
-        # auto: prefer node, fallback native
-        chain = [NodeNovelAdapter(), NativeFallbackAdapter()]
+        # auto: prefer node, fallback native when available
+        if site in {"syosetu", "novel18"}:
+            return [NodeNovelAdapter(), NativeFallbackAdapter()]
+        if site == "kakuyomu":
+            return [NodeNovelAdapter(), NativeKakuyomuAdapter()]
 
-        # native currently supports syosetu and novel18 only
-        if site not in {"syosetu", "novel18"}:
-            return [NodeNovelAdapter()]
-
-        return chain
+        return [NodeNovelAdapter()]
 
     def _write_normalized_outputs(self, result: DownloadResult) -> Path:
         book_title = sanitize_filename(result.meta.title or "book")

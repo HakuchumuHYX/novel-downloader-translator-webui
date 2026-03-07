@@ -450,6 +450,7 @@ class TaskWorker(threading.Thread):
         if source_size <= 0:
             raise RuntimeError(f"Downloader finished but source output file is empty: {source_path}")
 
+        self._log_download_manifest_summary(task_id, download_root)
         self._log(task_id, f"Download source resolved: {source_path}")
         return source_path
 
@@ -860,6 +861,42 @@ class TaskWorker(threading.Thread):
                 hide_next = True
 
         return " ".join(redacted)
+
+    def _log_download_manifest_summary(self, task_id: int, download_root: Path) -> None:
+        manifests = sorted(
+            [p for p in download_root.rglob("manifest.json") if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not manifests:
+            return
+
+        manifest_path = manifests[0]
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            self._log(task_id, f"Download manifest exists but could not be parsed: {manifest_path}", level="warning")
+            return
+
+        backend = str(payload.get("backend_used", "")).strip() or "unknown"
+        status = str(payload.get("status", "")).strip() or "unknown"
+        chapter_count = self._safe_int(payload.get("chapter_count"))
+        expected_count = self._safe_int(payload.get("expected_chapter_count"))
+        skipped = self._safe_int(payload.get("skipped_chapters"))
+
+        summary = (
+            "Download manifest summary: "
+            f"backend={backend}, status={status}, chapter_count={chapter_count}, "
+            f"expected={expected_count}, skipped={skipped}"
+        )
+        self._log(task_id, summary)
+
+        reasons = payload.get("skipped_reasons")
+        if isinstance(reasons, list):
+            for reason in reasons:
+                txt = str(reason).strip()
+                if txt:
+                    self._log(task_id, f"Download skipped reason: {txt}", level="warning")
 
     def _resolve_source_file(self, download_root: Path, merged_name: str, save_format: str) -> Path:
         suffix = ".txt" if save_format == "txt" else ".epub"

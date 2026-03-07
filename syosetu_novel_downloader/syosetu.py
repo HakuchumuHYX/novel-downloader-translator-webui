@@ -2,9 +2,10 @@ import os
 import re
 import shutil
 import ssl
-from asyncio import Semaphore
+from asyncio import Semaphore, gather
 from collections.abc import Callable
 from enum import Enum
+from urllib.parse import parse_qs, urlparse
 
 import aiofiles
 import aiohttp
@@ -43,6 +44,7 @@ class Syosetu:
         self.total_chapters = 0
 
         self.__semaphore = Semaphore(8)
+        self.__novel_info_soups: list[BeautifulSoup] = []
 
     async def async_init(self):
         ssl_context = ssl.create_default_context()
@@ -55,7 +57,13 @@ class Syosetu:
             connector=connector,
             cookies=cookies,
         )
-        self.__novel_info_soup = await self.__fetch_novel_info()
+
+        self.__novel_info_soups = await self.__fetch_all_novel_info_pages()
+        if not self.__novel_info_soups:
+            raise RuntimeError("Could not fetch novel info pages")
+
+        # Keep page1 soup for compatibility with existing helpers.
+        self.__novel_info_soup = self.__novel_info_soups[0]
         self.novel_title = self.__get_novel_title()
         self.author = self.__get_novel_author()
 
@@ -64,13 +72,39 @@ class Syosetu:
             await self.__session.close()
             self.__session = None
 
-    async def __fetch_novel_info(self) -> BeautifulSoup:
+    async def __fetch_novel_info(self, page: int = 1) -> BeautifulSoup:
+        suffix = f"/{self.novel_id}"
+        if page > 1:
+            suffix = f"{suffix}/?p={page}"
+
         async with self.__session.get(
-            f"{self.base_url}/{self.novel_id}",
+            f"{self.base_url}{suffix}",
             headers=headers,
             proxy=self.proxy,
         ) as response:
             return BeautifulSoup(await response.text(), "html.parser")
+
+    async def __fetch_all_novel_info_pages(self) -> list[BeautifulSoup]:
+        first = await self.__fetch_novel_info(page=1)
+        max_page = self.__extract_max_page(first)
+        if max_page <= 1:
+            return [first]
+
+        remaining_pages = await gather(
+            *(self.__fetch_novel_info(page=i) for i in range(2, max_page + 1))
+        )
+        return [first, *remaining_pages]
+
+    def __extract_max_page(self, soup: BeautifulSoup) -> int:
+        max_page = 1
+        for a_tag in soup.find_all("a", href=True):
+            href = str(a_tag.get("href") or "")
+            parsed = urlparse(href)
+            page_values = parse_qs(parsed.query).get("p", [])
+            for page in page_values:
+                if page.isdigit():
+                    max_page = max(max_page, int(page))
+        return max_page
 
     async def __fetch_chapters_info(self, chapter: int) -> BeautifulSoup:
         async with self.__session.get(
@@ -83,32 +117,56 @@ class Syosetu:
     def __extract_chapter_numbers(self) -> list[int]:
         numbers: set[int] = set()
         pattern = re.compile(rf"/{re.escape(self.novel_id)}/(\d+)/?$")
-        for a_tag in self.__novel_info_soup.find_all("a", href=True):
-            href = str(a_tag.get("href") or "")
-            matched = pattern.search(href)
-            if matched:
-                numbers.add(int(matched.group(1)))
+
+        soups = self.__novel_info_soups or [self.__novel_info_soup]
+        for soup in soups:
+            for a_tag in soup.find_all("a", href=True):
+                href = str(a_tag.get("href") or "")
+                matched = pattern.search(href)
+                if matched:
+                    numbers.add(int(matched.group(1)))
         return sorted(numbers)
 
     async def __get_novel_parts(self) -> dict[NovelTitle, ChapterRange]:
-        chapters = {}
-        chapter_titles: Tag = self.__novel_info_soup.find_all("div", class_="p-eplist__chapter-title")
-        for title in chapter_titles:
-            chapter_title: Tag = title.get_text(strip=True)
-            chapter_numbers = []
-            next_element = title.find_next_sibling()
-            while next_element and next_element.name == "div" and "p-eplist__sublist" in next_element.get("class", []):
-                a_tag = next_element.find("a", href=True)
-                if a_tag:
-                    chapter_number = int(a_tag["href"].split("/")[-2])
-                    chapter_numbers.append(chapter_number)
-                next_element = next_element.find_next_sibling()
+        part_numbers: dict[PartTitle, list[int]] = {}
+        current_part: PartTitle = self.novel_title
 
-            if chapter_numbers:
-                chapters[chapter_title] = range(min(chapter_numbers), max(chapter_numbers) + 1)
+        soups = self.__novel_info_soups or [self.__novel_info_soup]
+        chapter_pattern = re.compile(rf"/{re.escape(self.novel_id)}/(\d+)/?$")
 
-        if chapters:
-            return chapters
+        for soup in soups:
+            blocks = soup.find_all("div", class_=["p-eplist__chapter-title", "p-eplist__sublist"])
+            for block in blocks:
+                classes = block.get("class", [])
+                if "p-eplist__chapter-title" in classes:
+                    current_part = block.get_text(strip=True) or self.novel_title
+                    continue
+
+                if "p-eplist__sublist" not in classes:
+                    continue
+
+                a_tag = block.find("a", href=True)
+                if not a_tag:
+                    continue
+
+                href = str(a_tag.get("href") or "")
+                matched = chapter_pattern.search(href)
+                if not matched:
+                    continue
+
+                chapter_number = int(matched.group(1))
+                key = current_part or self.novel_title
+                part_numbers.setdefault(key, [])
+                part_numbers[key].append(chapter_number)
+
+        if part_numbers:
+            chapters: dict[NovelTitle, ChapterRange] = {}
+            for title, nums in part_numbers.items():
+                unique_sorted = sorted(set(nums))
+                if unique_sorted:
+                    chapters[title] = range(min(unique_sorted), max(unique_sorted) + 1)
+            if chapters:
+                return chapters
 
         chapter_numbers = self.__extract_chapter_numbers()
         if chapter_numbers:

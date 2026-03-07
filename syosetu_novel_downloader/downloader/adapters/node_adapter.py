@@ -129,9 +129,17 @@ class NodeNovelAdapter(BackendAdapter):
                 skipped_reasons.append(
                     f"Downloaded {len(chapters)}/{expected_count} chapters"
                 )
-                if options.paid_policy == "fail":
+                skipped_reasons.append(
+                    f"Node backend output appears incomplete for site={site}"
+                )
+
+                if options.paid_policy == "metadata":
+                    skipped_reasons.append(
+                        "Paid policy is metadata; keep partial metadata-only result."
+                    )
+                else:
                     raise RuntimeError(
-                        f"Missing chapters: downloaded {len(chapters)} expected {expected_count}"
+                        f"Incomplete node download: downloaded {len(chapters)} expected {expected_count}"
                     )
 
             meta = BookMeta(
