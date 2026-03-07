@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from typing import Iterable
@@ -76,7 +77,7 @@ def merge_chapters_to_txt(chapters: Iterable, output_path: str, record_chapter_n
 
 
 def merge_txt_files(input_dir, merged_filename="full_book.txt"):
-    all_txt_files = sorted([f for f in os.listdir(input_dir) if f.endswith(".txt")])
+    all_txt_files = [f for f in os.listdir(input_dir) if f.endswith(".txt")]
     if not all_txt_files:
         raise FileNotFoundError(f"No txt files found in {input_dir}")
 
@@ -93,6 +94,8 @@ def merge_txt_files(input_dir, merged_filename="full_book.txt"):
             return merged_path
         raise FileNotFoundError(f"No txt files found in {input_dir}")
 
+    txt_files = _sort_txt_files_for_merge(input_dir, txt_files)
+
     merged_path = os.path.join(input_dir, merged_filename)
     with open(merged_path, "w", encoding="utf-8") as merged:
         for idx, file in enumerate(txt_files):
@@ -103,6 +106,37 @@ def merge_txt_files(input_dir, merged_filename="full_book.txt"):
             if idx != len(txt_files) - 1:
                 merged.write("\n\n")
     return merged_path
+
+
+def _sort_txt_files_for_merge(input_dir: str, txt_files: list[str]) -> list[str]:
+    order_file = os.path.join(input_dir, "_parts_order.json")
+    if os.path.exists(order_file):
+        try:
+            part_titles = json.loads(open(order_file, "r", encoding="utf-8").read())
+            if isinstance(part_titles, list) and part_titles:
+                order_map = {
+                    str(title): idx for idx, title in enumerate(part_titles) if isinstance(title, str)
+                }
+
+                def _part_sort_key(filename: str) -> tuple[int, int, str]:
+                    stem = os.path.splitext(filename)[0]
+                    idx = order_map.get(stem)
+                    if idx is None:
+                        return (1, 10**9, filename)
+                    return (0, idx, filename)
+
+                return sorted(txt_files, key=_part_sort_key)
+        except Exception:
+            pass
+
+    # Fallback: preserve creation/download order as much as possible.
+    return sorted(
+        txt_files,
+        key=lambda f: (
+            os.stat(os.path.join(input_dir, f)).st_mtime_ns,
+            f,
+        ),
+    )
 
 
 def convert_directory_txt_to_epub(*args):

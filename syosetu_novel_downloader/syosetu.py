@@ -116,6 +116,10 @@ class Syosetu:
 
         return {}
 
+    async def get_novel_part_titles(self) -> list[PartTitle]:
+        parts = await self.__get_novel_parts()
+        return list(parts.keys())
+
     @deprecated(version="0.1.0", reason="Feeling bad, so use __get_novel_parts instead")
     async def __get_novel_parts2(self) -> dict[NovelTitle, ChapterRange]:
         parts = {}

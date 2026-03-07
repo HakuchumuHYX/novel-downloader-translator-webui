@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -51,7 +52,7 @@ class NativeFallbackAdapter(BackendAdapter):
 
             chapters = []
             chapter_index = 1
-            for txt in sorted(book_dir.glob("*.txt")):
+            for txt in _iter_volume_txt_files_in_order(book_dir):
                 volume_name = txt.stem
                 sections = _parse_native_volume_txt(txt)
                 for title, content in sections:
@@ -107,6 +108,7 @@ async def _run_native_download(
     )
     await syosetu.async_init()
     try:
+        part_titles = await syosetu.get_novel_part_titles()
         await syosetu.async_download(str(temp_dir))
     finally:
         await syosetu.async_close()
@@ -114,7 +116,46 @@ async def _run_native_download(
     dirs = [p for p in temp_dir.iterdir() if p.is_dir()]
     if not dirs:
         raise RuntimeError("Native downloader produced no output directory")
-    return dirs[0]
+
+    book_dir = dirs[0]
+    if part_titles:
+        order_file = book_dir / "_parts_order.json"
+        order_file.write_text(
+            json.dumps(part_titles, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    return book_dir
+
+
+def _iter_volume_txt_files_in_order(book_dir: Path) -> list[Path]:
+    txt_files = [p for p in book_dir.glob("*.txt")]
+
+    order_file = book_dir / "_parts_order.json"
+    if not order_file.exists():
+        return sorted(txt_files)
+
+    try:
+        part_titles = json.loads(order_file.read_text(encoding="utf-8"))
+    except Exception:
+        return sorted(txt_files)
+
+    if not isinstance(part_titles, list) or not part_titles:
+        return sorted(txt_files)
+
+    order_map = {
+        str(title): idx for idx, title in enumerate(part_titles) if isinstance(title, str)
+    }
+    if not order_map:
+        return sorted(txt_files)
+
+    def _sort_key(path: Path) -> tuple[int, int, str]:
+        idx = order_map.get(path.stem)
+        if idx is None:
+            return (1, 10**9, path.name)
+        return (0, idx, path.name)
+
+    return sorted(txt_files, key=_sort_key)
 
 
 def _parse_native_volume_txt(path: Path) -> list[tuple[str, str]]:
