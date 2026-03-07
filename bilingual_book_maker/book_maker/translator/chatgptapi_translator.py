@@ -221,7 +221,7 @@ class ChatGPTAPI(Base):
                     raise
             except Exception as e:
                 print(str(e))
-                return
+                raise
 
         # todo: Determine whether to print according to the cli option
         if needprint:

@@ -285,38 +285,44 @@ class TaskWorker(threading.Thread):
         else:
             command.extend(["--novel_id", source_input])
 
-        cookie_file_path: Path | None = None
+        cookie_profile_id = payload.get("cookie_profile_id")
+        if cookie_profile_id:
+            with get_conn() as conn:
+                profile = get_cookie_profile(conn, int(cookie_profile_id))
+            if profile:
+                cookie_value = decrypt_text(profile["cookie_enc"]).strip()
+                if cookie_value:
+                    # Pass as header-style cookie string for downloader compatibility.
+                    command.extend(["--cookie", cookie_value])
+                else:
+                    self._log(task_id, f"Cookie profile {cookie_profile_id} is empty", level="warning")
+
+        timeout_seconds = int(
+            payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds
+        )
+
+        self._log(task_id, "Running downloader command")
+        self._run_command(task_id, command, cwd=str(cfg.downloader_entry.parent), timeout_seconds=timeout_seconds)
+
+        source_path = self._resolve_source_file(
+            download_root,
+            merged_name=payload.get("merged_name") or settings.get("merged_name", ""),
+            save_format=save_format,
+        )
+
+        if not source_path.exists():
+            raise RuntimeError(f"Downloader finished but source output file does not exist: {source_path}")
+
         try:
-            cookie_profile_id = payload.get("cookie_profile_id")
-            if cookie_profile_id:
-                with get_conn() as conn:
-                    profile = get_cookie_profile(conn, int(cookie_profile_id))
-                if profile:
-                    cookie_value = decrypt_text(profile["cookie_enc"])
-                    cookie_file_path = download_root / f".cookie_{task_id}.txt"
-                    cookie_file_path.write_text(cookie_value, encoding="utf-8")
-                    command.extend(["--cookie-file", str(cookie_file_path)])
+            source_size = source_path.stat().st_size
+        except OSError as exc:
+            raise RuntimeError(f"Failed to stat downloaded source output file: {source_path}") from exc
 
-            timeout_seconds = int(
-                payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds
-            )
+        if source_size <= 0:
+            raise RuntimeError(f"Downloader finished but source output file is empty: {source_path}")
 
-            self._log(task_id, "Running downloader command")
-            self._run_command(task_id, command, cwd=str(cfg.downloader_entry.parent), timeout_seconds=timeout_seconds)
-
-            source_path = self._resolve_source_file(
-                download_root,
-                merged_name=payload.get("merged_name") or settings.get("merged_name", ""),
-                save_format=save_format,
-            )
-            self._log(task_id, f"Download source resolved: {source_path}")
-            return source_path
-        finally:
-            if cookie_file_path and cookie_file_path.exists():
-                try:
-                    cookie_file_path.unlink()
-                except Exception:
-                    pass
+        self._log(task_id, f"Download source resolved: {source_path}")
+        return source_path
 
     def _run_translate(
         self,
@@ -412,6 +418,13 @@ class TaskWorker(threading.Thread):
 
         translated = self._resolve_translated_file(source_path)
         if translated and translated.exists():
+            try:
+                translated_size = translated.stat().st_size
+            except OSError as exc:
+                raise RuntimeError(f"Failed to stat translated output file: {translated}") from exc
+            if translated_size <= 0:
+                raise RuntimeError(f"Translation finished but translated output file is empty: {translated}")
+
             self._log(task_id, f"Translation output resolved: {translated}")
             return translated
 
@@ -628,9 +641,38 @@ class TaskWorker(threading.Thread):
             if timed_out:
                 raise RuntimeError(f"__TASK_TIMEOUT__ command exceeded {timeout_seconds}s")
             if rc != 0:
-                raise RuntimeError(f"Command failed with exit code {rc}: {' '.join(command)}")
+                raise RuntimeError(f"Command failed with exit code {rc}: {self._redact_command(command)}")
         finally:
             self._unregister_process(task_id)
+
+    def _redact_command(self, command: list[str]) -> str:
+        sensitive_flags = {
+            "--openai_key",
+            "--claude_key",
+            "--gemini_key",
+            "--groq_key",
+            "--xai_key",
+            "--qwen_key",
+            "--caiyun_key",
+            "--deepl_key",
+            "--custom_api",
+            "--cookie",
+            "--cookie-file",
+        }
+
+        redacted: list[str] = []
+        hide_next = False
+        for token in command:
+            if hide_next:
+                redacted.append("***")
+                hide_next = False
+                continue
+
+            redacted.append(token)
+            if token in sensitive_flags:
+                hide_next = True
+
+        return " ".join(redacted)
 
     def _resolve_source_file(self, download_root: Path, merged_name: str, save_format: str) -> Path:
         suffix = ".txt" if save_format == "txt" else ".epub"

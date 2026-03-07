@@ -250,12 +250,18 @@ class SRTBookLoader(BaseBookLoader):
                 self.bilingual_result,
             )
 
-        except (KeyboardInterrupt, Exception) as e:
+        except KeyboardInterrupt as e:
             print(e)
             print("you can resume it next time")
             self._save_progress()
             self._save_temp_book()
-            sys.exit(0)
+            raise
+        except Exception as e:
+            print(e)
+            print("you can resume it next time")
+            self._save_progress()
+            self._save_temp_book()
+            raise
 
     def _save_temp_book(self):
         for i, block in enumerate(self.blocks):

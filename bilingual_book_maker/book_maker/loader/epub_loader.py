@@ -959,7 +959,7 @@ class EPUBBookLoader(BaseBookLoader):
                 self.retranslate_book(
                     index, p_to_save_len, pbar, trans_taglist, self.retranslate
                 )
-                exit(0)
+                return
             # Add the things that don't need to be translated first, so that you can see the img after the interruption
             for item in self.origin_book.get_items():
                 if item.get_type() != ITEM_DOCUMENT:
@@ -1099,10 +1099,10 @@ class EPUBBookLoader(BaseBookLoader):
                 print("you can resume it next time")
                 self._save_progress()
                 self._save_temp_book()
-            sys.exit(0)
+            raise
         except Exception:
             traceback.print_exc()
-            sys.exit(0)
+            raise
 
     def load_state(self):
         try:

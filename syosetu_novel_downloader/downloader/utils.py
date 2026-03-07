@@ -47,30 +47,44 @@ def sanitize_filename(name: str, default: str = "book") -> str:
 
 def parse_cookie_file(path: Path) -> str:
     raw = path.read_text(encoding="utf-8", errors="ignore")
-    cookies = []
+    cookies: list[tuple[str, str]] = []
 
-    # Netscape cookies format
+    # Accept both:
+    # 1) Netscape cookie format lines
+    # 2) Header-style "a=b; c=d" (single or multi-line)
     for line in raw.splitlines():
         s = line.strip()
         if not s or s.startswith("#"):
             continue
+
         if "\t" in s:
             parts = s.split("\t")
             if len(parts) >= 7:
-                cookies.append(f"{parts[5]}={parts[6]}")
+                name = parts[5].strip()
+                value = parts[6].strip()
+                if name:
+                    cookies.append((name, value))
             continue
-        if "=" in s:
-            k, v = s.split("=", 1)
-            cookies.append(f"{k.strip()}={v.strip()}")
 
-    dedup = []
+        # Header-like or loose key-value syntax in the file
+        # e.g. "a=b; c=d", or one cookie per line "a=b"
+        for seg in s.split(";"):
+            part = seg.strip()
+            if not part or "=" not in part:
+                continue
+            k, v = part.split("=", 1)
+            key = k.strip()
+            if not key:
+                continue
+            cookies.append((key, v.strip()))
+
+    dedup: list[str] = []
     seen = set()
-    for item in cookies:
-        key = item.split("=", 1)[0]
+    for key, value in cookies:
         if key in seen:
             continue
         seen.add(key)
-        dedup.append(item)
+        dedup.append(f"{key}={value}")
     return "; ".join(dedup)
 
 

@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+import sys
+import traceback
 from os import environ as env
 
 from book_maker.loader import BOOK_LOADER_DICT
@@ -623,5 +625,17 @@ So you are close to reaching the limit. You have to choose your own value, there
     e.make_bilingual_book()
 
 
+def _run_cli() -> int:
+    try:
+        main()
+        return 0
+    except KeyboardInterrupt:
+        print("Interrupted by user.")
+        return 130
+    except Exception:
+        traceback.print_exc()
+        return 1
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(_run_cli())
