@@ -59,8 +59,10 @@
     <label>断点续跑（resume） <input type="text" name="resume" value="{{ settings.resume }}"></label>
     <label>累计段数（accumulated_num） <input type="text" name="accumulated_num"
         value="{{ settings.accumulated_num }}"></label>
-    <label>并行数（parallel_workers） <input type="text" name="parallel_workers"
-        value="{{ settings.parallel_workers }}"></label>
+    <label>最大并发线程数（parallel_workers）
+      <input type="text" name="parallel_workers" value="{{ settings.parallel_workers }}">
+    </label>
+    <p class="hint">说明：TXT 翻译时按 batches 并发；EPUB 翻译时按章节（chapters）并发。</p>
     <label>上下文模式（use_context） <input type="text" name="use_context" value="{{ settings.use_context }}"></label>
     <label>上下文段落上限（context_paragraph_limit） <input type="text" name="context_paragraph_limit"
         value="{{ settings.context_paragraph_limit }}"></label>

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import shutil as cmdshutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-import shutil as cmdshutil
 
 from ..models import BookMeta, Chapter, DownloadOptions, DownloadResult
-from ..utils import detect_site_from_url, sanitize_filename
+from ..utils import detect_site_from_url, emit_progress, sanitize_filename
 from .base import BackendAdapter
 
 
@@ -49,19 +49,62 @@ class NodeNovelAdapter(BackendAdapter):
                 command.insert(-1, "--cookiesFile")
                 command.insert(-1, str(cookie_file_arg))
 
-            completed = subprocess.run(
+            expected_total = 0
+            last_emitted: tuple[int, int] | None = None
+            probe_interval = 0.5
+            emit_progress("download", 0, 0, "chapter")
+            last_emitted = (0, 0)
+
+            process = subprocess.Popen(
                 command,
                 cwd=str(Path(__file__).resolve().parents[2]),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="ignore",
-                timeout=options.timeout,
             )
-            if completed.returncode != 0:
+
+            deadline = time.monotonic() + max(1, options.timeout)
+            timed_out = False
+
+            while True:
+                rc = process.poll()
+
+                metadata_path = _pick_live_metadata_json(temp_dir)
+                if metadata_path:
+                    _, parsed_total = _parse_node_metadata(metadata_path)
+                    if parsed_total > 0:
+                        expected_total = parsed_total
+
+                current_count = _count_downloaded_txt(temp_dir)
+                current_evt = (current_count, expected_total)
+                if current_evt != last_emitted:
+                    emit_progress("download", current_count, expected_total, "chapter")
+                    last_emitted = current_evt
+
+                if rc is not None:
+                    break
+
+                if time.monotonic() > deadline:
+                    timed_out = True
+                    process.kill()
+                    break
+
+                time.sleep(probe_interval)
+
+            stdout_text, stderr_text = process.communicate()
+            if timed_out:
+                raise RuntimeError(
+                    "Node backend failed: timeout after "
+                    f"{options.timeout}s. "
+                    + (stderr_text.strip() or stdout_text.strip() or "unknown error")
+                )
+
+            if process.returncode != 0:
                 raise RuntimeError(
                     "Node backend failed: "
-                    + (completed.stderr.strip() or completed.stdout.strip() or "unknown error")
+                    + (stderr_text.strip() or stdout_text.strip() or "unknown error")
                 )
 
             root = _find_node_work_root(temp_dir)
@@ -70,6 +113,11 @@ class NodeNovelAdapter(BackendAdapter):
 
             txt_files = sorted(root.rglob("*.txt"))
             chapters = _parse_node_txt_chapters(root, txt_files)
+
+            final_total = expected_count if expected_count > 0 else expected_total
+            final_current = len(chapters)
+            if (final_current, final_total) != last_emitted:
+                emit_progress("download", final_current, final_total, "chapter")
 
             if options.paid_policy != "metadata" and not chapters:
                 raise RuntimeError("Node backend produced no chapter text")
@@ -201,6 +249,23 @@ def _pick_metadata_json(root: Path) -> Path | None:
     if json_files:
         return json_files[0]
     return None
+
+
+def _pick_live_metadata_json(temp_dir: Path) -> Path | None:
+    candidates = sorted(
+        [p for p in temp_dir.rglob("*.json") if p.is_file()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        if path.name.lower() == "manifest.json":
+            continue
+        return path
+    return None
+
+
+def _count_downloaded_txt(temp_dir: Path) -> int:
+    return sum(1 for p in temp_dir.rglob("*.txt") if p.is_file() and "README.txt" not in p.name)
 
 
 def _parse_node_metadata(path: Path | None) -> tuple[str, int]:

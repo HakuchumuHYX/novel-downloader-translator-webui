@@ -1,24 +1,25 @@
 import os
 import re
+from typing import Iterable
 
 from ebooklib import epub
 
 
 def create_epub_from_txt(file_path, output_folder):
     print(f"convert {file_path}")
-    with open(file_path, 'r', encoding='utf-8') as file:
+    with open(file_path, "r", encoding="utf-8") as file:
         text_content = file.read()
 
-    chapters = re.split(r'● ', text_content)
+    chapters = re.split(r"● ", text_content)
 
     book = epub.EpubBook()
 
-    book.set_identifier('id' + str(os.path.basename(file_path)))
+    book.set_identifier("id" + str(os.path.basename(file_path)))
     title = os.path.basename(file_path).split(".")[:-1][0]
     book.set_title(title)
-    book.set_language('ja')
+    book.set_language("ja")
 
-    book.spine = ['nav']
+    book.spine = ["nav"]
 
     for i, chapter in enumerate(chapters):
         if not chapter.strip():
@@ -27,10 +28,10 @@ def create_epub_from_txt(file_path, output_folder):
         chapter_title, _, chapter_body = chapter.partition("\n")
         c = epub.EpubHtml(
             title=chapter_title,
-            file_name=f"chap_{i+1}.xhtml",
-            lang='ja',
+            file_name=f"chap_{i + 1}.xhtml",
+            lang="ja",
         )
-        c.content = '<h1>' + chapter_title + '</h1>' + chapter_body
+        c.content = "<h1>" + chapter_title + "</h1>" + chapter_body
 
         book.add_item(c)
 
@@ -40,7 +41,38 @@ def create_epub_from_txt(file_path, output_folder):
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
 
-    epub.write_epub(os.path.join(output_folder, f'{title}.epub'), book, {})
+    epub.write_epub(os.path.join(output_folder, f"{title}.epub"), book, {})
+
+
+def merge_chapters_to_txt(chapters: Iterable, output_path: str, record_chapter_number: bool = False) -> str:
+    """
+    Merge chapters into one txt file in strict original order.
+
+    `chapters` is expected to be an iterable of Chapter-like objects
+    with fields: index, title, content.
+    """
+    chapter_list = list(chapters or [])
+    if not chapter_list:
+        raise FileNotFoundError("No chapters available to merge")
+
+    chapter_list.sort(key=lambda c: int(getattr(c, "index", 0)))
+
+    lines: list[str] = []
+    for chapter in chapter_list:
+        index = int(getattr(chapter, "index", 0))
+        title = str(getattr(chapter, "title", "") or "").strip()
+        content = str(getattr(chapter, "content", "") or "").rstrip()
+
+        if record_chapter_number:
+            lines.append(f"● {title} [総第{index}話]")
+        else:
+            lines.append(f"● {title}")
+        lines.append(content)
+        lines.append("")
+
+    with open(output_path, "w", encoding="utf-8") as merged:
+        merged.write("\n".join(lines).rstrip() + "\n")
+    return output_path
 
 
 def merge_txt_files(input_dir, merged_filename="full_book.txt"):

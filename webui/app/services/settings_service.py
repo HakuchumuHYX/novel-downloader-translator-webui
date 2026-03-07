@@ -37,7 +37,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "test_num": "80",
     "resume": "false",
     "accumulated_num": "1",
-    "parallel_workers": "1",
+    "parallel_workers": "5",
     "use_context": "false",
     "context_paragraph_limit": "0",
     "block_size": "-1",

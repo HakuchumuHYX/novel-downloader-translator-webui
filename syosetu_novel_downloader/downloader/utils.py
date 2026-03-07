@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -71,6 +72,20 @@ def parse_cookie_file(path: Path) -> str:
         seen.add(key)
         dedup.append(item)
     return "; ".join(dedup)
+
+
+def emit_progress(stage: str, current: int, total: int, unit: str) -> None:
+    payload = {
+        "stage": str(stage),
+        "current": int(current),
+        "total": int(total),
+        "unit": str(unit),
+    }
+    print("__WEBUI_PROGRESS__ " + json.dumps(payload, ensure_ascii=False), flush=True)
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 def write_manifest(path: Path, data: dict) -> None:

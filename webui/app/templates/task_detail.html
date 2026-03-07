@@ -12,22 +12,40 @@
         {% elif task.status == 'succeeded' %}成功
         {% elif task.status == 'failed' %}失败
         {% elif task.status == 'canceled' %}已取消
+        {% elif task.status == 'paused' %}已暂停
         {% else %}{{ task.status }}
         {% endif %}
       </span>
     </p>
     <p>来源：<span id="source_type"></span></p>
     <p>模式：<span id="mode"></span></p>
+    <p>最大并发线程数（parallel_workers）：<span id="parallel_workers">{{ task.parallel_workers }}</span></p>
     <p>错误码：<code id="error_code">{{ task.error_code }}</code></p>
     <p>错误信息：<code id="error">{{ task.error_message }}</code></p>
     <p>创建时间：{{ task.created_at }}</p>
     <p>开始时间：{{ task.started_at }}</p>
     <p>结束时间：{{ task.finished_at }}</p>
 
+    <h3>进度</h3>
+    <div class="progress-block">
+      <div class="progress-row">
+        <div class="progress-title">下载</div>
+        <progress id="download-progress" value="0" max="1"></progress>
+        <code id="download-progress-text">0/?</code>
+      </div>
+      <div class="progress-row">
+        <div class="progress-title">翻译</div>
+        <progress id="translate-progress" value="0" max="1"></progress>
+        <code id="translate-progress-text">0/?</code>
+      </div>
+    </div>
+
     <div class="actions">
       <button id="retry-btn" onclick="retryTask()">重试</button>
       <button id="run-full-btn" onclick="runFullTask()">基于当前结果全量重跑</button>
       <button id="cancel-btn" onclick="cancelTask()">取消排队任务</button>
+      <button id="pause-btn" onclick="pauseTask()">暂停</button>
+      <button id="resume-btn" onclick="resumeTask()">继续</button>
       <button id="stop-btn" onclick="stopTask()">停止运行中任务</button>
     </div>
   </section>
@@ -81,6 +99,7 @@
     const map = {
       queued: '排队中',
       running: '运行中',
+      paused: '已暂停',
       succeeded: '成功',
       failed: '失败',
       canceled: '已取消'
@@ -128,16 +147,20 @@
     const retryBtn = document.getElementById('retry-btn');
     const runFullBtn = document.getElementById('run-full-btn');
     const cancelBtn = document.getElementById('cancel-btn');
+    const pauseBtn = document.getElementById('pause-btn');
+    const resumeBtn = document.getElementById('resume-btn');
     const stopBtn = document.getElementById('stop-btn');
 
     // Retry: avoid creating "retry of running task" by mistake.
-    retryBtn.disabled = status === 'running' || status === 'queued';
+    retryBtn.disabled = status === 'running' || status === 'queued' || status === 'paused';
 
     // Run-full: only makes sense when we have some result already.
-    runFullBtn.disabled = status === 'running' || status === 'queued';
+    runFullBtn.disabled = status === 'running' || status === 'queued' || status === 'paused';
 
-    // Cancel only queued, stop only running.
+    // Cancel only queued, stop/pause only running, resume only paused.
     cancelBtn.disabled = status !== 'queued';
+    pauseBtn.disabled = status !== 'running';
+    resumeBtn.disabled = status !== 'paused';
     stopBtn.disabled = status !== 'running';
   }
 
@@ -226,6 +249,25 @@
     };
   }
 
+  function setProgress(barId, textId, currentRaw, totalRaw) {
+    const bar = document.getElementById(barId);
+    const text = document.getElementById(textId);
+
+    const cur = Number.isFinite(Number(currentRaw)) ? Number(currentRaw) : 0;
+    const total = Number.isFinite(Number(totalRaw)) ? Number(totalRaw) : 0;
+
+    if (total > 0) {
+      bar.max = total;
+      bar.value = Math.min(cur, total);
+      text.textContent = `${Math.min(cur, total)}/${total}`;
+    } else {
+      // unknown total: show indeterminate-ish by using max=1 and clamping.
+      bar.max = 1;
+      bar.value = cur > 0 ? 1 : 0;
+      text.textContent = `${cur}/?`;
+    }
+  }
+
   async function refreshTask() {
     const resp = await fetch(`/api/tasks/{{ task.id }}`);
     if (!resp.ok) return null;
@@ -235,8 +277,12 @@
     status.className = `status status-${task.status}`;
     document.getElementById('source_type').textContent = sourceText(task.source_type);
     document.getElementById('mode').textContent = modeText(task.mode);
+    document.getElementById('parallel_workers').textContent = task.parallel_workers || '';
     document.getElementById('error').textContent = task.error_message || '';
     document.getElementById('error_code').textContent = task.error_code || '';
+
+    setProgress('download-progress', 'download-progress-text', task.download_current, task.download_total);
+    setProgress('translate-progress', 'translate-progress-text', task.translate_current, task.translate_total);
 
     updateButtons(task);
 
@@ -275,6 +321,26 @@
       await post('/api/tasks/{{ task.id }}/cancel');
     } catch (err) {
       alert(`取消失败: ${String(err)}`);
+    } finally {
+      await refreshTask();
+    }
+  }
+
+  async function pauseTask() {
+    try {
+      await post('/api/tasks/{{ task.id }}/pause');
+    } catch (err) {
+      alert(`暂停失败: ${String(err)}`);
+    } finally {
+      await refreshTask();
+    }
+  }
+
+  async function resumeTask() {
+    try {
+      await post('/api/tasks/{{ task.id }}/resume');
+    } catch (err) {
+      alert(`继续失败: ${String(err)}`);
     } finally {
       await refreshTask();
     }

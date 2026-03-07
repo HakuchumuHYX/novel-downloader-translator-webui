@@ -3,7 +3,12 @@ from pathlib import Path
 
 import aiohttp
 
-from converters import convert_directory_txt_to_epub, convert_single_txt_to_epub, merge_txt_files
+from converters import (
+    convert_directory_txt_to_epub,
+    convert_single_txt_to_epub,
+    merge_chapters_to_txt,
+    merge_txt_files,
+)
 from downloader import DownloadJob, DownloadOptions
 from downloader.utils import normalize_input_url, sanitize_filename
 
@@ -149,7 +154,16 @@ def main():
             merged_filename = sanitize_filename(result.meta.title or "", default="full_book")
         if not merged_filename.endswith(".txt"):
             merged_filename = f"{merged_filename}.txt"
-        merged_txt_path = merge_txt_files(str(novel_dir), merged_filename)
+        try:
+            merged_txt_path = merge_chapters_to_txt(
+                result.chapters,
+                str(novel_dir / merged_filename),
+                record_chapter_number=args.record_chapter_number,
+            )
+        except Exception:
+            # Fallback for compatibility if chapter metadata is unavailable.
+            merged_txt_path = merge_txt_files(str(novel_dir), merged_filename)
+
         print(f"Merged txt saved: {merged_txt_path}")
 
         if args.save_format == "epub":

@@ -81,7 +81,8 @@ def claim_next_queued_task(conn: sqlite3.Connection) -> sqlite3.Row | None:
                 started_at = ?,
                 error_message = '',
                 error_code = '',
-                stop_requested = 0
+                stop_requested = 0,
+                pause_requested = 0
             WHERE id = ? AND status = 'queued'
             """,
             (utcnow_iso(), task_id),
@@ -98,7 +99,8 @@ def set_task_running(conn: sqlite3.Connection, task_id: int) -> None:
             started_at = ?,
             error_message = '',
             error_code = '',
-            stop_requested = 0
+            stop_requested = 0,
+            pause_requested = 0
         WHERE id = ?
         """,
         (utcnow_iso(), task_id),
@@ -120,6 +122,106 @@ def request_stop_task(conn: sqlite3.Connection, task_id: int) -> bool:
 def is_stop_requested(conn: sqlite3.Connection, task_id: int) -> bool:
     row = conn.execute("SELECT stop_requested FROM tasks WHERE id = ?", (task_id,)).fetchone()
     return bool(row and int(row["stop_requested"]) == 1)
+
+
+def request_pause_task(conn: sqlite3.Connection, task_id: int) -> bool:
+    """
+    Ask the running worker to pause this task.
+
+    The worker will terminate the current subprocess and mark task status='paused'.
+    """
+    cur = conn.execute(
+        "UPDATE tasks SET pause_requested = 1 WHERE id = ? AND status = 'running'",
+        (task_id,),
+    )
+    return cur.rowcount > 0
+
+
+def clear_pause_requested(conn: sqlite3.Connection, task_id: int) -> None:
+    conn.execute("UPDATE tasks SET pause_requested = 0 WHERE id = ?", (task_id,))
+
+
+def is_pause_requested(conn: sqlite3.Connection, task_id: int) -> bool:
+    row = conn.execute("SELECT pause_requested FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return bool(row and int(row["pause_requested"]) == 1)
+
+
+def mark_task_paused(conn: sqlite3.Connection, task_id: int) -> None:
+    """
+    Mark task as paused.
+
+    Note: keep finished_at as-is (usually NULL) so it doesn't look like a completed task.
+    """
+    conn.execute(
+        """
+        UPDATE tasks
+        SET status = 'paused',
+            running_pid = NULL
+        WHERE id = ?
+        """,
+        (task_id,),
+    )
+
+
+def resume_task(conn: sqlite3.Connection, task_id: int) -> bool:
+    """
+    Resume a paused task by putting it back into the queue.
+
+    Progress fields are intentionally kept so UI can keep showing progress,
+    and the underlying tools can continue with --resume.
+    """
+    cur = conn.execute(
+        """
+        UPDATE tasks
+        SET status = 'queued',
+            error_message = '',
+            error_code = '',
+            stop_requested = 0,
+            pause_requested = 0,
+            running_pid = NULL
+        WHERE id = ? AND status = 'paused'
+        """,
+        (task_id,),
+    )
+    return cur.rowcount > 0
+
+
+def update_task_progress(
+    conn: sqlite3.Connection,
+    task_id: int,
+    *,
+    stage: str | None = None,
+    download_current: int | None = None,
+    download_total: int | None = None,
+    translate_current: int | None = None,
+    translate_total: int | None = None,
+) -> None:
+    fields: list[str] = []
+    params: list[Any] = []
+
+    if stage is not None:
+        fields.append("stage = ?")
+        params.append(stage)
+
+    if download_current is not None:
+        fields.append("download_current = ?")
+        params.append(int(download_current))
+    if download_total is not None:
+        fields.append("download_total = ?")
+        params.append(int(download_total))
+
+    if translate_current is not None:
+        fields.append("translate_current = ?")
+        params.append(int(translate_current))
+    if translate_total is not None:
+        fields.append("translate_total = ?")
+        params.append(int(translate_total))
+
+    if not fields:
+        return
+
+    params.append(task_id)
+    conn.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE id = ?", params)
 
 
 def set_task_finished(

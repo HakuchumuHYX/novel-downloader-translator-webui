@@ -402,8 +402,8 @@ So you are close to reaching the limit. You have to choose your own value, there
         "--parallel-workers",
         dest="parallel_workers",
         type=int,
-        default=1,
-        help="Number of parallel workers for EPUB chapter processing. Use 2-4 for better performance. Default: 1",
+        default=5,
+        help="Number of parallel workers for EPUB/TXT processing. Default: 5",
     )
 
     options = parser.parse_args()

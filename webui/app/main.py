@@ -57,6 +57,7 @@ from .services.task_service import (
     list_cookie_profiles,
     list_task_templates,
     list_tasks,
+    resume_task,
 )
 from .services.worker import TaskWorker
 
@@ -131,6 +132,30 @@ def _preview_file(path: Path, page: int):
     return preview_text_file(path, page=page, per_page=120)
 
 
+def _normalize_parallel_workers(value: Any, fallback: str = "5") -> str:
+    try:
+        ivalue = int(str(value).strip())
+        if ivalue >= 1:
+            return str(ivalue)
+    except Exception:
+        pass
+    return fallback
+
+
+def _task_parallel_workers(task_row: Any, base_settings: dict[str, str] | None = None) -> str:
+    fallback = _normalize_parallel_workers(
+        (base_settings or {}).get("parallel_workers", "5"),
+        fallback="5",
+    )
+
+    try:
+        payload = json.loads(task_row["payload_json"])
+        overrides = payload.get("settings_overrides", {}) or {}
+        return _normalize_parallel_workers(overrides.get("parallel_workers", ""), fallback=fallback)
+    except Exception:
+        return fallback
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, _: str = Depends(verify_basic_auth)) -> HTMLResponse:
     with get_conn() as conn:
@@ -164,15 +189,18 @@ def task_detail_page(task_id: int, request: Request, _: str = Depends(verify_bas
         if not row:
             raise HTTPException(status_code=404, detail="Task not found")
         artifacts = [_row_to_dict(item) for item in list_artifacts(conn, task_id)]
+        settings = load_settings(conn)
 
     source_artifact = next((a for a in artifacts if a["kind"] == "source"), None)
     translated_artifact = next((a for a in artifacts if a["kind"] == "translated"), None)
+    task_data = _row_to_dict(row)
+    task_data["parallel_workers"] = _task_parallel_workers(row, settings)
 
     return templates.TemplateResponse(
         request,
         "task_detail.html",
         {
-            "task": _row_to_dict(row),
+            "task": task_data,
             "artifacts": artifacts,
             "source_artifact_id": source_artifact["id"] if source_artifact else None,
             "translated_artifact_id": translated_artifact["id"] if translated_artifact else None,
@@ -464,6 +492,12 @@ async def api_create_task(
         if key.startswith("override__"):
             settings_overrides[key.replace("override__", "", 1)] = str(value).strip()
 
+    # Always keep task-level parallel_workers valid, so it cannot silently fall back to old global value (e.g. 1).
+    settings_overrides["parallel_workers"] = _normalize_parallel_workers(
+        settings_overrides.get("parallel_workers", ""),
+        fallback="5",
+    )
+
     task_payload = {
         "mode": str(form.get("mode", payload.get("mode", "download_and_translate"))).strip(),
         "source_type": source_type,
@@ -526,8 +560,10 @@ def api_get_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONRespo
         if not row:
             raise HTTPException(status_code=404, detail="Task not found")
         artifacts = [_row_to_dict(item) for item in list_artifacts(conn, task_id)]
+        settings = load_settings(conn)
 
     data = _row_to_dict(row)
+    data["parallel_workers"] = _task_parallel_workers(row, settings)
     data["artifacts"] = artifacts
     return JSONResponse(data)
 
@@ -654,6 +690,21 @@ def api_stop_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResp
     if worker is None:
         raise HTTPException(status_code=500, detail="Worker is not initialized")
     ok = worker.stop_task(task_id)
+    return JSONResponse({"ok": ok})
+
+
+@app.post("/api/tasks/{task_id}/pause")
+def api_pause_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+    if worker is None:
+        raise HTTPException(status_code=500, detail="Worker is not initialized")
+    ok = worker.pause_task(task_id)
+    return JSONResponse({"ok": ok})
+
+
+@app.post("/api/tasks/{task_id}/resume")
+def api_resume_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+    with get_conn() as conn:
+        ok = resume_task(conn, task_id)
     return JSONResponse({"ok": ok})
 
 

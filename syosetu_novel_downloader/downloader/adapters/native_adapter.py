@@ -8,7 +8,7 @@ from pathlib import Path
 from syosetu import Syosetu
 
 from ..models import BookMeta, Chapter, DownloadOptions, DownloadResult
-from ..utils import detect_site_from_url
+from ..utils import detect_site_from_url, emit_progress
 from .base import BackendAdapter
 
 
@@ -95,7 +95,16 @@ async def _run_native_download(
     base_url: str,
     over18: bool,
 ) -> Path:
-    syosetu = Syosetu(novel_id, proxy, base_url=base_url, over18=over18)
+    def _progress_cb(current: int, total: int) -> None:
+        emit_progress("download", current, total, "chapter")
+
+    syosetu = Syosetu(
+        novel_id,
+        proxy,
+        base_url=base_url,
+        over18=over18,
+        progress_callback=_progress_cb,
+    )
     await syosetu.async_init()
     try:
         await syosetu.async_download(str(temp_dir))

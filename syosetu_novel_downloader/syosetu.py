@@ -2,15 +2,17 @@ import os
 import re
 import shutil
 import ssl
-import aiohttp
-import aiofiles
-from bs4 import BeautifulSoup, Tag  # type: ignore
-from pydantic import BaseModel
-from enum import Enum
 from asyncio import Semaphore
-from deprecated import deprecated
+from collections.abc import Callable
+from enum import Enum
 
-from custom_typing import NovelTitle, ChapterContent, ChapterRange, PartTitle, ChapterTitle
+import aiofiles
+import aiohttp
+from bs4 import BeautifulSoup, Tag  # type: ignore
+from deprecated import deprecated
+from pydantic import BaseModel
+
+from custom_typing import ChapterContent, ChapterRange, ChapterTitle, NovelTitle, PartTitle
 
 
 MAIN_URL: str = "https://ncode.syosetu.com"
@@ -28,6 +30,7 @@ class Syosetu:
         proxy: str = "",
         base_url: str = MAIN_URL,
         over18: bool = False,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
         self.novel_id = novel_id
         self.proxy = proxy
@@ -36,6 +39,8 @@ class Syosetu:
         self.novel_title: NovelTitle = ""
 
         self.record_chapter_index = False
+        self.progress_callback = progress_callback
+        self.total_chapters = 0
 
         self.__semaphore = Semaphore(8)
 
@@ -186,14 +191,30 @@ class Syosetu:
         print((len(parts) == 0) and "No part\n" or f"All parts:\n{chr(10).join(list(parts.keys()))}\n")
 
         if len(parts) != 0:
+            self.total_chapters = sum(len(v) for v in parts.values())
+        else:
+            chapter_range = self.__get_chapters_range()
+            self.total_chapters = len(chapter_range)
+
+        downloaded = 0
+        if self.progress_callback:
+            self.progress_callback(downloaded, self.total_chapters)
+
+        if len(parts) != 0:
             for k, v in parts.items():
                 print(f"Start download part: {k}")
                 for chapter_index in v:
                     await self.async_save(chapter_index, os.path.join(output_dir, k))
+                    downloaded += 1
+                    if self.progress_callback:
+                        self.progress_callback(downloaded, self.total_chapters)
         else:
             print(f"Start download novel: {self.novel_title}")
             for chapter_index in self.__get_chapters_range():
                 await self.async_save(chapter_index, os.path.join(output_dir, self.novel_title))
+                downloaded += 1
+                if self.progress_callback:
+                    self.progress_callback(downloaded, self.total_chapters)
 
 
 class SaveFormat(Enum):
@@ -207,4 +228,3 @@ class SyosuteArgs(BaseModel):
     output_dir: str
     save_format: SaveFormat
     record_chapter_number: bool
-

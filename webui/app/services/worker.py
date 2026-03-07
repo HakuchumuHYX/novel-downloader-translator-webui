@@ -20,13 +20,18 @@ from .task_service import (
     append_log,
     claim_next_queued_task,
     clear_artifacts,
+    clear_pause_requested,
     get_cookie_profile,
     get_task,
+    is_pause_requested,
     is_stop_requested,
     list_artifacts,
+    mark_task_paused,
+    request_pause_task,
     request_stop_task,
     set_task_finished,
     set_task_pid,
+    update_task_progress,
 )
 
 
@@ -37,6 +42,13 @@ class TaskWorker(threading.Thread):
         self._cleanup_tick = 0
         self._proc_lock = threading.Lock()
         self._running: dict[int, subprocess.Popen[str]] = {}
+        # Track intentional local termination reasons to distinguish pause/stop from real command failures.
+        self._terminate_reason: dict[int, str] = {}
+
+        # Throttle high-frequency progress events to avoid hammering SQLite.
+        self._progress_lock = threading.Lock()
+        self._progress_state: dict[int, tuple[float, dict[str, Any]]] = {}
+        self._progress_min_interval_seconds = float(os.getenv("WEBUI_PROGRESS_MIN_INTERVAL_SECONDS", "0.5"))
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -47,6 +59,27 @@ class TaskWorker(threading.Thread):
 
         with self._proc_lock:
             process = self._running.get(task_id)
+            if process and process.poll() is None:
+                self._terminate_reason[task_id] = "stopped"
+
+        if process and process.poll() is None:
+            self._terminate_process(process)
+            return True
+        return flagged
+
+    def pause_task(self, task_id: int) -> bool:
+        """
+        Request pausing a running task.
+
+        The worker will terminate the current subprocess and mark the task as paused.
+        """
+        with get_conn() as conn:
+            flagged = request_pause_task(conn, task_id)
+
+        with self._proc_lock:
+            process = self._running.get(task_id)
+            if process and process.poll() is None:
+                self._terminate_reason[task_id] = "paused"
 
         if process and process.poll() is None:
             self._terminate_process(process)
@@ -74,7 +107,17 @@ class TaskWorker(threading.Thread):
                 self._log(task_id, f"Worker error: {exc}", level="error")
                 with get_conn() as conn:
                     task = get_task(conn, task_id)
-                    if task and task["status"] == "running":
+                    if not task:
+                        continue
+
+                    # Pause is not a "finished" state; don't set finished_at.
+                    if status == "paused" and task["status"] == "running":
+                        clear_pause_requested(conn, task_id)
+                        mark_task_paused(conn, task_id)
+                        append_log(conn, task_id, "Task paused", level="info")
+                        continue
+
+                    if task["status"] == "running":
                         set_task_finished(
                             conn,
                             task_id,
@@ -86,16 +129,25 @@ class TaskWorker(threading.Thread):
     def _classify_error(self, exc: Exception) -> tuple[str, str]:
         msg = str(exc)
         low = msg.lower()
+        if "__task_paused__" in low:
+            return "paused", "PAUSED"
         if "__task_stopped__" in low:
             return "canceled", "STOPPED"
         if "__task_timeout__" in low:
             return "failed", "PROCESS_TIMEOUT"
+
+        # Stage-aware classification first (avoid false matches from file paths like /downloads/... in translate stage).
+        if "download_stage:" in low:
+            return "failed", "DOWNLOAD_FAILED"
+        if "translate_stage:" in low:
+            return "failed", "TRANSLATE_FAILED"
+
         if "auth" in low or "forbidden" in low or "unauthorized" in low or "cookie" in low:
             return "failed", "AUTH_FAILED"
-        if "download" in low or "node backend" in low or "native downloader" in low:
-            return "failed", "DOWNLOAD_FAILED"
         if "translate" in low or "translated output" in low:
             return "failed", "TRANSLATE_FAILED"
+        if "download" in low or "node backend" in low or "native downloader" in low:
+            return "failed", "DOWNLOAD_FAILED"
         return "failed", "UNKNOWN"
 
     def _log(self, task_id: int, message: str, level: str = "info") -> None:
@@ -125,6 +177,8 @@ class TaskWorker(threading.Thread):
 
         if payload.get("source_type") != "upload":
             try:
+                with get_conn() as conn:
+                    update_task_progress(conn, task_id, stage="download")
                 source_path = self._run_download(task_id, payload, effective_settings, download_root)
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"DOWNLOAD_STAGE: {exc}") from exc
@@ -136,6 +190,8 @@ class TaskWorker(threading.Thread):
         translated_path = Path("")
         if payload.get("mode", "download_and_translate") == "download_and_translate":
             try:
+                with get_conn() as conn:
+                    update_task_progress(conn, task_id, stage="translate")
                 translated_path = self._run_translate(task_id, source_path, payload, effective_settings)
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"TRANSLATE_STAGE: {exc}") from exc
@@ -364,12 +420,14 @@ class TaskWorker(threading.Thread):
     def _register_process(self, task_id: int, process: subprocess.Popen[str]) -> None:
         with self._proc_lock:
             self._running[task_id] = process
+            self._terminate_reason.pop(task_id, None)
         with get_conn() as conn:
             set_task_pid(conn, task_id, process.pid)
 
     def _unregister_process(self, task_id: int) -> None:
         with self._proc_lock:
             self._running.pop(task_id, None)
+            self._terminate_reason.pop(task_id, None)
         with get_conn() as conn:
             set_task_pid(conn, task_id, None)
 
@@ -399,6 +457,46 @@ class TaskWorker(threading.Thread):
             # As a last resort, let the caller decide how to proceed.
             pass
 
+    def _maybe_update_progress_throttled(self, task_id: int, evt: dict[str, Any]) -> None:
+        now = time.monotonic()
+        with self._progress_lock:
+            last_ts, last_evt = self._progress_state.get(task_id, (0.0, {}))
+            if evt == last_evt and (now - last_ts) < (self._progress_min_interval_seconds * 4):
+                return
+            if (now - last_ts) < self._progress_min_interval_seconds:
+                return
+            self._progress_state[task_id] = (now, dict(evt))
+
+        stage = str(evt.get("stage") or "").strip()
+        cur = evt.get("current")
+        total = evt.get("total")
+
+        try:
+            cur_i = int(cur) if cur is not None else None
+        except Exception:
+            cur_i = None
+        try:
+            total_i = int(total) if total is not None else None
+        except Exception:
+            total_i = None
+
+        with get_conn() as conn:
+            kwargs: dict[str, Any] = {"stage": stage or None}
+            if stage == "download":
+                kwargs["download_current"] = cur_i
+                kwargs["download_total"] = total_i
+            elif stage == "translate":
+                kwargs["translate_current"] = cur_i
+                kwargs["translate_total"] = total_i
+            else:
+                # Unknown stage: still allow setting stage text only.
+                kwargs.pop("download_current", None)
+                kwargs.pop("download_total", None)
+                kwargs.pop("translate_current", None)
+                kwargs.pop("translate_total", None)
+
+            update_task_progress(conn, task_id, **kwargs)
+
     def _run_command(self, task_id: int, command: list[str], cwd: str, timeout_seconds: int) -> None:
         process = subprocess.Popen(
             command,
@@ -425,6 +523,7 @@ class TaskWorker(threading.Thread):
         started = time.monotonic()
         timed_out = False
         stopped = False
+        paused = False
         stop_check_interval = 1.0
         last_stop_check = 0.0
 
@@ -440,9 +539,20 @@ class TaskWorker(threading.Thread):
                     break
 
                 if item:
-                    self._log(task_id, item.rstrip("\n"))
+                    stripped = item.rstrip("\n")
+                    if stripped.startswith("__WEBUI_PROGRESS__"):
+                        payload = stripped[len("__WEBUI_PROGRESS__") :].strip()
+                        try:
+                            evt = json.loads(payload)
+                            if isinstance(evt, dict):
+                                self._maybe_update_progress_throttled(task_id, evt)
+                        except Exception:
+                            # Avoid breaking the worker due to malformed progress line.
+                            self._log(task_id, f"Invalid progress event: {payload}", level="warning")
+                    else:
+                        self._log(task_id, stripped)
 
-                # Only enforce timeout/stop while process is still alive.
+                # Only enforce timeout/stop/pause while process is still alive.
                 if process.poll() is not None:
                     continue
 
@@ -457,9 +567,11 @@ class TaskWorker(threading.Thread):
                     with get_conn() as conn:
                         if is_stop_requested(conn, task_id):
                             stopped = True
+                        if is_pause_requested(conn, task_id):
+                            paused = True
                     last_stop_check = now
 
-                if stopped:
+                if stopped or paused:
                     self._terminate_process(process)
                     break
 
@@ -487,8 +599,30 @@ class TaskWorker(threading.Thread):
                 if item is None:
                     break
                 if item:
-                    self._log(task_id, item.rstrip("\n"))
+                    stripped = item.rstrip("\n")
+                    if stripped.startswith("__WEBUI_PROGRESS__"):
+                        payload = stripped[len("__WEBUI_PROGRESS__") :].strip()
+                        try:
+                            evt = json.loads(payload)
+                            if isinstance(evt, dict):
+                                self._maybe_update_progress_throttled(task_id, evt)
+                        except Exception:
+                            self._log(task_id, f"Invalid progress event: {payload}", level="warning")
+                    else:
+                        self._log(task_id, stripped)
 
+            # Distinguish intentional local terminate (pause/stop) from real non-zero command failures.
+            local_reason = ""
+            with self._proc_lock:
+                local_reason = self._terminate_reason.get(task_id, "")
+
+            if rc < 0 and local_reason == "paused":
+                raise RuntimeError("__TASK_PAUSED__")
+            if rc < 0 and local_reason == "stopped":
+                raise RuntimeError("__TASK_STOPPED__")
+
+            if paused:
+                raise RuntimeError("__TASK_PAUSED__")
             if stopped:
                 raise RuntimeError("__TASK_STOPPED__")
             if timed_out:

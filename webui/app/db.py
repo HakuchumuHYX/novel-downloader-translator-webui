@@ -133,6 +133,12 @@ def init_db() -> None:
         _ensure_column(conn, "tasks", "error_code", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "tasks", "running_pid", "INTEGER")
         _ensure_column(conn, "tasks", "stop_requested", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "tasks", "pause_requested", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "tasks", "stage", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "tasks", "download_current", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "tasks", "download_total", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "tasks", "translate_current", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "tasks", "translate_total", "INTEGER NOT NULL DEFAULT 0")
 
         _ensure_column(conn, "task_artifacts", "file_size", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "task_artifacts", "modified_at", "TEXT NOT NULL DEFAULT ''")
