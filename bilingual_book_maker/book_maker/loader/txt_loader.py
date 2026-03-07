@@ -1,6 +1,8 @@
 import builtins
 import json
+import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -57,6 +59,12 @@ class TXTBookLoader(BaseBookLoader):
         self.batch_size = 10
         self.single_translate = single_translate
         self.parallel_workers = max(1, parallel_workers)
+        self._checkpoint_interval_seconds = max(
+            0.0,
+            float(os.getenv("BBM_TXT_CHECKPOINT_INTERVAL_SECONDS", "2.0")),
+        )
+        self._last_checkpoint_ts = 0.0
+        self._last_checkpoint_completed = -1
 
         try:
             with open(f"{txt_name}", encoding="utf-8") as f:
@@ -104,6 +112,25 @@ class TXTBookLoader(BaseBookLoader):
         if len(self.p_to_save) < total_batches:
             self.p_to_save.extend([""] * (total_batches - len(self.p_to_save)))
 
+    def _maybe_checkpoint(self, completed: int, total_batches: int, force: bool = False) -> None:
+        if total_batches <= 0:
+            return
+
+        now = time.monotonic()
+        if not force and self._checkpoint_interval_seconds > 0:
+            if completed == self._last_checkpoint_completed:
+                return
+            if (now - self._last_checkpoint_ts) < self._checkpoint_interval_seconds:
+                return
+
+        try:
+            self._save_progress()
+            self._last_checkpoint_ts = now
+            self._last_checkpoint_completed = completed
+        except Exception as e:
+            # Best effort: checkpoint failure should not abort the whole translation task.
+            print(f"warning: failed to checkpoint resume state: {e}")
+
     def make_bilingual_book(self):
         batches = self._build_batches()
         total_batches = len(batches)
@@ -127,6 +154,7 @@ class TXTBookLoader(BaseBookLoader):
                     self.p_to_save[idx] = translated
                     completed += 1
                     emit_progress("translate", completed, total_batches, "batch")
+                    self._maybe_checkpoint(completed, total_batches)
             else:
                 with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
                     future_map = {
@@ -144,6 +172,9 @@ class TXTBookLoader(BaseBookLoader):
                         self.p_to_save[idx] = translated
                         completed += 1
                         emit_progress("translate", completed, total_batches, "batch")
+                        self._maybe_checkpoint(completed, total_batches)
+
+            self._maybe_checkpoint(completed, total_batches, force=True)
 
             self.bilingual_result = []
             for idx, batch_text in batches:
@@ -190,8 +221,15 @@ class TXTBookLoader(BaseBookLoader):
                 "version": 2,
                 "p_to_save": self.p_to_save,
             }
-            with open(self.bin_path, "w", encoding="utf-8") as f:
+            final_path = Path(self.bin_path)
+            temp_path = final_path.with_suffix(final_path.suffix + ".tmp")
+
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+
+            temp_path.replace(final_path)
         except Exception as e:
             raise Exception("can not save resume file") from e
 

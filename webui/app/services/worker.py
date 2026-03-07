@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -63,7 +64,7 @@ class TaskWorker(threading.Thread):
                 self._terminate_reason[task_id] = "stopped"
 
         if process and process.poll() is None:
-            self._terminate_process(process)
+            self._terminate_process(process, reason="stopped")
             return True
 
         # Fallback for orphan running tasks (e.g. after restart):
@@ -104,7 +105,7 @@ class TaskWorker(threading.Thread):
                 self._terminate_reason[task_id] = "paused"
 
         if process and process.poll() is None:
-            self._terminate_process(process)
+            self._terminate_process(process, reason="paused")
             return True
 
         # Fallback for orphan running tasks (e.g. after restart):
@@ -194,6 +195,59 @@ class TaskWorker(threading.Thread):
         with get_conn() as conn:
             append_log(conn, task_id, clean, level=level)
 
+    def _safe_int(self, value: Any) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return 0
+
+    def _file_has_content(self, path: Path) -> bool:
+        try:
+            return path.exists() and path.is_file() and path.stat().st_size > 0
+        except OSError:
+            return False
+
+    def _try_reuse_download_source(
+        self,
+        task_id: int,
+        payload: dict[str, Any],
+        settings: dict[str, str],
+        download_root: Path,
+        source_full_book_path: str,
+    ) -> Path | None:
+        source_full_book_path = (source_full_book_path or "").strip()
+        if source_full_book_path:
+            candidate = Path(source_full_book_path)
+            if self._file_has_content(candidate):
+                self._log(task_id, f"Resuming with existing source_full_book_path: {candidate}")
+                return candidate
+
+        save_format = payload.get("save_format") or settings.get("save_format", "txt")
+        merged_name = payload.get("merged_name") or settings.get("merged_name", "")
+        try:
+            candidate = self._resolve_source_file(
+                download_root,
+                merged_name=merged_name,
+                save_format=save_format,
+            )
+        except Exception:
+            return None
+
+        if self._file_has_content(candidate):
+            self._log(task_id, f"Resuming with existing downloaded source: {candidate}")
+            return candidate
+
+        return None
+
+    def _translate_resume_state_path(self, source_path: Path) -> Path:
+        # bilingual_book_maker txt loader expects:
+        #   <book_dir>/.<book_stem>.temp.bin
+        return source_path.parent / f".{source_path.stem}.temp.bin"
+
+    def _has_translate_resume_state(self, source_path: Path) -> bool:
+        state_path = self._translate_resume_state_path(source_path)
+        return self._file_has_content(state_path)
+
     def _process_task(self, task_id: int) -> None:
         cfg = get_config()
         with get_conn() as conn:
@@ -213,14 +267,34 @@ class TaskWorker(threading.Thread):
         self._log(task_id, f"Task started. source_type={payload.get('source_type')} mode={payload.get('mode')}")
 
         source_path = Path(payload.get("upload_path", ""))
+        task_stage = str(task["stage"] or "").strip().lower()
+        translate_current = self._safe_int(task["translate_current"])
+        resume_translate = task_stage == "translate" or translate_current > 0
 
         if payload.get("source_type") != "upload":
-            try:
-                with get_conn() as conn:
-                    update_task_progress(conn, task_id, stage="download")
-                source_path = self._run_download(task_id, payload, effective_settings, download_root)
-            except Exception as exc:  # noqa: BLE001
-                raise RuntimeError(f"DOWNLOAD_STAGE: {exc}") from exc
+            reused_source = self._try_reuse_download_source(
+                task_id,
+                payload,
+                effective_settings,
+                download_root,
+                str(task["source_full_book_path"] or ""),
+            )
+            if reused_source is not None:
+                source_path = reused_source
+                self._log(task_id, "Skipping download stage because source output already exists")
+            else:
+                if resume_translate:
+                    self._log(
+                        task_id,
+                        "Resume requested from translate stage, but no reusable source output was found; restarting download.",
+                        level="warning",
+                    )
+                try:
+                    with get_conn() as conn:
+                        update_task_progress(conn, task_id, stage="download")
+                    source_path = self._run_download(task_id, payload, effective_settings, download_root)
+                except Exception as exc:  # noqa: BLE001
+                    raise RuntimeError(f"DOWNLOAD_STAGE: {exc}") from exc
         else:
             if not source_path.exists():
                 raise FileNotFoundError(f"Uploaded file not found: {source_path}")
@@ -228,10 +302,24 @@ class TaskWorker(threading.Thread):
 
         translated_path = Path("")
         if payload.get("mode", "download_and_translate") == "download_and_translate":
+            if resume_translate and not self._has_translate_resume_state(source_path):
+                self._log(
+                    task_id,
+                    "Translate resume state file is missing; continuing without --resume.",
+                    level="warning",
+                )
+                resume_translate = False
+
             try:
                 with get_conn() as conn:
                     update_task_progress(conn, task_id, stage="translate")
-                translated_path = self._run_translate(task_id, source_path, payload, effective_settings)
+                translated_path = self._run_translate(
+                    task_id,
+                    source_path,
+                    payload,
+                    effective_settings,
+                    force_resume=resume_translate,
+                )
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"TRANSLATE_STAGE: {exc}") from exc
 
@@ -369,6 +457,8 @@ class TaskWorker(threading.Thread):
         source_path: Path,
         payload: dict[str, Any],
         settings: dict[str, str],
+        *,
+        force_resume: bool = False,
     ) -> Path:
         cfg = get_config()
         command = [
@@ -421,8 +511,19 @@ class TaskWorker(threading.Thread):
 
         if settings.get("use_context", "false").lower() in {"1", "true", "yes", "on"}:
             command.append("--use_context")
-        if settings.get("resume", "false").lower() in {"1", "true", "yes", "on"}:
-            command.append("--resume")
+
+        resume_requested = force_resume or settings.get("resume", "false").lower() in {"1", "true", "yes", "on"}
+        if resume_requested:
+            resume_state_path = self._translate_resume_state_path(source_path)
+            if self._file_has_content(resume_state_path):
+                command.append("--resume")
+            else:
+                self._log(
+                    task_id,
+                    f"Resume requested but state file not found: {resume_state_path}; running without --resume.",
+                    level="warning",
+                )
+
         if settings.get("allow_navigable_strings", "false").lower() in {"1", "true", "yes", "on"}:
             command.append("--allow_navigable_strings")
 
@@ -483,31 +584,50 @@ class TaskWorker(threading.Thread):
         with get_conn() as conn:
             set_task_pid(conn, task_id, None)
 
-    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
+    def _terminate_process(self, process: subprocess.Popen[str], reason: str = "") -> None:
         cfg = get_config()
         if process.poll() is not None:
             return
 
-        # Best-effort terminate -> kill -> reap (avoid leaving zombies behind).
-        try:
-            process.terminate()
-            process.wait(timeout=cfg.stop_grace_seconds)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-        except Exception:
-            pass
+        reason_norm = (reason or "").strip().lower()
 
-        try:
-            process.kill()
-        except Exception:
+        def _send(sig: int) -> bool:
+            try:
+                # start_new_session=True makes child pid also the process group id.
+                os.killpg(process.pid, sig)
+                return True
+            except Exception:
+                try:
+                    process.send_signal(sig)
+                    return True
+                except Exception:
+                    return False
+
+        def _wait(timeout_seconds: float) -> bool:
+            if timeout_seconds <= 0:
+                return False
+            try:
+                process.wait(timeout=timeout_seconds)
+                return True
+            except subprocess.TimeoutExpired:
+                return False
+            except Exception:
+                return False
+
+        # Pause prefers SIGINT to trigger KeyboardInterrupt and persist resume state.
+        if reason_norm == "paused":
+            if _send(signal.SIGINT):
+                if _wait(max(float(cfg.stop_grace_seconds), 8.0)):
+                    return
+
+        if _send(signal.SIGTERM):
+            if _wait(max(float(cfg.stop_grace_seconds), 2.0)):
+                return
+
+        if not _send(signal.SIGKILL):
             return
 
-        try:
-            process.wait(timeout=5)
-        except Exception:
-            # As a last resort, let the caller decide how to proceed.
-            pass
+        _wait(5.0)
 
     def _maybe_update_progress_throttled(self, task_id: int, evt: dict[str, Any]) -> None:
         now = time.monotonic()
@@ -558,6 +678,7 @@ class TaskWorker(threading.Thread):
             text=True,
             encoding="utf-8",
             errors="replace",
+            start_new_session=True,
         )
         self._register_process(task_id, process)
 
@@ -611,7 +732,7 @@ class TaskWorker(threading.Thread):
                 elapsed = time.monotonic() - started
                 if elapsed > timeout_seconds:
                     timed_out = True
-                    self._terminate_process(process)
+                    self._terminate_process(process, reason="timeout")
                     break
 
                 now = time.monotonic()
@@ -623,15 +744,18 @@ class TaskWorker(threading.Thread):
                             paused = True
                     last_stop_check = now
 
-                if stopped or paused:
-                    self._terminate_process(process)
+                if stopped:
+                    self._terminate_process(process, reason="stopped")
+                    break
+                if paused:
+                    self._terminate_process(process, reason="paused")
                     break
 
             # Ensure the process is reaped even after terminate/kill.
             try:
                 rc = process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                self._terminate_process(process)
+                self._terminate_process(process, reason="timeout")
                 try:
                     rc = process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
