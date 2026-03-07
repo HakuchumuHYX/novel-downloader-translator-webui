@@ -65,6 +65,28 @@ class TaskWorker(threading.Thread):
         if process and process.poll() is None:
             self._terminate_process(process)
             return True
+
+        # Fallback for orphan running tasks (e.g. after restart):
+        # stop flag is set but there is no local subprocess to consume it.
+        if flagged:
+            with get_conn() as conn:
+                task = get_task(conn, task_id)
+                if task and task["status"] == "running":
+                    append_log(
+                        conn,
+                        task_id,
+                        "Stop requested but no active worker process found; marking task as canceled.",
+                        level="warning",
+                    )
+                    set_task_finished(
+                        conn,
+                        task_id,
+                        status="canceled",
+                        error_message="Task was running without active worker process; canceled by stop request.",
+                        error_code="STOPPED_ORPHAN",
+                    )
+                    return True
+
         return flagged
 
     def pause_task(self, task_id: int) -> bool:
@@ -84,6 +106,23 @@ class TaskWorker(threading.Thread):
         if process and process.poll() is None:
             self._terminate_process(process)
             return True
+
+        # Fallback for orphan running tasks (e.g. after restart):
+        # pause flag is set but there is no local subprocess to consume it.
+        if flagged:
+            with get_conn() as conn:
+                task = get_task(conn, task_id)
+                if task and task["status"] == "running":
+                    append_log(
+                        conn,
+                        task_id,
+                        "Pause requested but no active worker process found; marking task as paused.",
+                        level="warning",
+                    )
+                    mark_task_paused(conn, task_id)
+                    append_log(conn, task_id, "Task paused", level="info")
+                    return True
+
         return flagged
 
     def run(self) -> None:

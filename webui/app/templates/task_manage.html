@@ -25,43 +25,45 @@
         <button onclick="refreshTasks()">刷新</button>
     </div>
 
-    <table>
-        <thead>
-            <tr>
-                <th><input type="checkbox" id="check-all" onchange="toggleAllFromHeader(this)"></th>
-                <th>ID</th>
-                <th>状态</th>
-                <th>来源</th>
-                <th>模式</th>
-                <th>创建时间</th>
-                <th>详情</th>
-            </tr>
-        </thead>
-        <tbody id="task-table-body">
-            {% for t in tasks %}
-            <tr>
-                <td><input type="checkbox" class="task-check" value="{{ t.id }}"></td>
-                <td>{{ t.id }}</td>
-                <td>
-                    <span class="status status-{{ t.status }}">
-                        {% if t.status == 'queued' %}排队中
-                        {% elif t.status == 'running' %}运行中
-                        {% elif t.status == 'paused' %}已暂停
-                        {% elif t.status == 'succeeded' %}成功
-                        {% elif t.status == 'failed' %}失败
-                        {% elif t.status == 'canceled' %}已取消
-                        {% else %}{{ t.status }}
-                        {% endif %}
-                    </span>
-                </td>
-                <td>{{ t.source_type }}</td>
-                <td>{{ t.mode }}</td>
-                <td>{{ t.created_at }}</td>
-                <td><a href="/tasks/{{ t.id }}">查看</a></td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-wrap">
+        <table class="table-responsive">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="check-all" onchange="toggleAllFromHeader(this)"></th>
+                    <th>ID</th>
+                    <th>状态</th>
+                    <th>来源</th>
+                    <th>模式</th>
+                    <th>创建时间</th>
+                    <th>详情</th>
+                </tr>
+            </thead>
+            <tbody id="task-table-body">
+                {% for t in tasks %}
+                <tr>
+                    <td data-label="选择"><input type="checkbox" class="task-check" value="{{ t.id }}"></td>
+                    <td data-label="ID">{{ t.id }}</td>
+                    <td data-label="状态">
+                        <span class="status status-{{ t.status }}">
+                            {% if t.status == 'queued' %}排队中
+                            {% elif t.status == 'running' %}运行中
+                            {% elif t.status == 'paused' %}已暂停
+                            {% elif t.status == 'succeeded' %}成功
+                            {% elif t.status == 'failed' %}失败
+                            {% elif t.status == 'canceled' %}已取消
+                            {% else %}{{ t.status }}
+                            {% endif %}
+                        </span>
+                    </td>
+                    <td data-label="来源">{{ t.source_type }}</td>
+                    <td data-label="模式">{{ t.mode }}</td>
+                    <td data-label="创建时间">{{ t.created_at }}</td>
+                    <td data-label="详情"><a href="/tasks/{{ t.id }}">查看</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </section>
 
 <section class="panel">
@@ -134,13 +136,13 @@
         for (const t of data.items || []) {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-        <td><input type="checkbox" class="task-check" value="${t.id}"></td>
-        <td>${t.id}</td>
-        <td><span class="status status-${t.status}">${t.status}</span></td>
-        <td>${t.source_type || ''}</td>
-        <td>${t.mode || ''}</td>
-        <td>${t.created_at || ''}</td>
-        <td><a href="/tasks/${t.id}">查看</a></td>
+        <td data-label="选择"><input type="checkbox" class="task-check" value="${t.id}"></td>
+        <td data-label="ID">${t.id}</td>
+        <td data-label="状态"><span class="status status-${t.status}">${t.status}</span></td>
+        <td data-label="来源">${t.source_type || ''}</td>
+        <td data-label="模式">${t.mode || ''}</td>
+        <td data-label="创建时间">${t.created_at || ''}</td>
+        <td data-label="详情"><a href="/tasks/${t.id}">查看</a></td>
       `;
             body.appendChild(tr);
         }

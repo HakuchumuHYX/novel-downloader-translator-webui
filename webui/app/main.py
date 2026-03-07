@@ -65,6 +65,7 @@ from .services.task_service import (
     list_tasks,
     list_tasks_by_ids,
     list_task_descendants,
+    reconcile_orphan_running_tasks,
     resume_task,
 )
 from .services.worker import TaskWorker
@@ -97,6 +98,8 @@ def _startup() -> None:
         raise RuntimeError("WEBUI_SECRET_KEY is required when WEBUI_REQUIRE_SECRET_KEY=true")
 
     init_db()
+    with get_conn() as conn:
+        reconcile_orphan_running_tasks(conn)
     worker = TaskWorker()
     worker.start()
 

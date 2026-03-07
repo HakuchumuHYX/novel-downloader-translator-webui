@@ -107,6 +107,47 @@ def set_task_running(conn: sqlite3.Connection, task_id: int) -> None:
     )
 
 
+def reconcile_orphan_running_tasks(conn: sqlite3.Connection) -> list[int]:
+    """
+    Reconcile stale running tasks after worker/app restart.
+
+    Rationale:
+    - When process/container restarts, in-memory worker state and subprocesses are gone.
+    - Tasks persisted as status='running' can become "orphans" that never advance.
+    - Move them to paused so users can resume or manage them safely.
+    """
+    rows = conn.execute("SELECT id FROM tasks WHERE status = 'running' ORDER BY id ASC").fetchall()
+    recovered: list[int] = []
+
+    for row in rows:
+        task_id = int(row["id"])
+        cur = conn.execute(
+            """
+            UPDATE tasks
+            SET status = 'paused',
+                running_pid = NULL,
+                stop_requested = 0,
+                pause_requested = 0,
+                error_code = 'WORKER_RESTARTED',
+                error_message = 'Worker restarted while task was running; task moved to paused.'
+            WHERE id = ? AND status = 'running'
+            """,
+            (task_id,),
+        )
+        if cur.rowcount <= 0:
+            continue
+
+        append_log(
+            conn,
+            task_id,
+            "Worker restarted while task was running. Marked as paused; use resume to continue.",
+            level="warning",
+        )
+        recovered.append(task_id)
+
+    return recovered
+
+
 def set_task_pid(conn: sqlite3.Connection, task_id: int, pid: int | None) -> None:
     conn.execute("UPDATE tasks SET running_pid = ? WHERE id = ?", (pid, task_id))
 
@@ -156,7 +197,9 @@ def mark_task_paused(conn: sqlite3.Connection, task_id: int) -> None:
         """
         UPDATE tasks
         SET status = 'paused',
-            running_pid = NULL
+            running_pid = NULL,
+            stop_requested = 0,
+            pause_requested = 0
         WHERE id = ?
         """,
         (task_id,),
