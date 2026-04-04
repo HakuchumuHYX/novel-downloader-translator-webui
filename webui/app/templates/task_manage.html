@@ -18,11 +18,15 @@
 </section>
 
 <section class="panel">
-    <h2>任务列表（最近 500 条）</h2>
+    <h2>任务列表（共 {{ total }} 条）</h2>
     <div class="actions">
         <button onclick="selectAll(true)">全选</button>
         <button onclick="selectAll(false)">取消全选</button>
         <button onclick="refreshTasks()">刷新</button>
+        {% if has_prev %}<a class="btn" href="/tasks/manage?page={{ page - 1 }}&page_size={{ page_size }}">上一页</a>{%
+        endif %}
+        {% if has_next %}<a class="btn" href="/tasks/manage?page={{ page + 1 }}&page_size={{ page_size }}">下一页</a>{%
+        endif %}
     </div>
 
     <div class="table-wrap">
@@ -71,7 +75,63 @@
     <pre id="result-box" class="logs"></pre>
 </section>
 
+<div id="task-manage-meta" data-page="{{ page }}" data-page-size="{{ page_size }}" style="display:none"></div>
+
 <script>
+    const taskManageMeta = document.getElementById('task-manage-meta');
+    const currentPage = Number(taskManageMeta?.dataset?.page || '1');
+    const currentPageSize = Number(taskManageMeta?.dataset?.pageSize || '100');
+
+    function taskStatusText(status) {
+        const map = {
+            queued: '排队中',
+            running: '运行中',
+            paused: '已暂停',
+            succeeded: '成功',
+            failed: '失败',
+            canceled: '已取消',
+        };
+        return map[status] || status || '';
+    }
+
+    function appendTaskCell(row, label, content) {
+        const cell = document.createElement('td');
+        cell.setAttribute('data-label', label);
+        if (content instanceof Node) {
+            cell.appendChild(content);
+        } else {
+            cell.textContent = content;
+        }
+        row.appendChild(cell);
+    }
+
+    function buildTaskRow(task) {
+        const row = document.createElement('tr');
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'task-check';
+        checkbox.value = String(task.id || '');
+        appendTaskCell(row, '选择', checkbox);
+        appendTaskCell(row, 'ID', String(task.id || ''));
+
+        const statusWrap = document.createElement('span');
+        statusWrap.className = `status status-${task.status || ''}`;
+        statusWrap.textContent = taskStatusText(task.status);
+        appendTaskCell(row, '状态', statusWrap);
+
+        appendTaskCell(row, '来源', task.source_type || '');
+        appendTaskCell(row, '模式', task.mode || '');
+        appendTaskCell(row, '创建时间', task.created_at || '');
+
+        const link = document.createElement('a');
+        link.href = `/tasks/${task.id}`;
+        link.textContent = '查看';
+        appendTaskCell(row, '详情', link);
+
+        return row;
+    }
+
     function getSelectedTaskIds() {
         const checks = document.querySelectorAll('.task-check:checked');
         const ids = [];
@@ -123,7 +183,7 @@
     }
 
     async function refreshTasks() {
-        const resp = await fetch('/api/tasks');
+        const resp = await fetch(`/api/tasks?page=${currentPage}&page_size=${currentPageSize}`);
         if (!resp.ok) {
             showResult(`刷新失败: HTTP ${resp.status}`);
             return;
@@ -131,20 +191,10 @@
 
         const data = await resp.json();
         const body = document.getElementById('task-table-body');
-        body.innerHTML = '';
+        body.textContent = '';
 
         for (const t of data.items || []) {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-        <td data-label="选择"><input type="checkbox" class="task-check" value="${t.id}"></td>
-        <td data-label="ID">${t.id}</td>
-        <td data-label="状态"><span class="status status-${t.status}">${t.status}</span></td>
-        <td data-label="来源">${t.source_type || ''}</td>
-        <td data-label="模式">${t.mode || ''}</td>
-        <td data-label="创建时间">${t.created_at || ''}</td>
-        <td data-label="详情"><a href="/tasks/${t.id}">查看</a></td>
-      `;
-            body.appendChild(tr);
+            body.appendChild(buildTaskRow(t));
         }
     }
 

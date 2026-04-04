@@ -98,11 +98,12 @@
   <pre id="logs" class="logs"></pre>
 </section>
 
-<div id="task-meta" data-status="{{ task.status }}" data-source-type="{{ task.source_type }}"
-  data-mode="{{ task.mode }}" style="display:none"></div>
+<div id="task-meta" data-task-id="{{ task.id }}" data-status="{{ task.status }}"
+  data-source-type="{{ task.source_type }}" data-mode="{{ task.mode }}" style="display:none"></div>
 
 <script>
   const meta = document.getElementById('task-meta');
+  const taskId = Number(meta?.dataset?.taskId || '0');
   const rawStatus = meta?.dataset?.status || '';
   const rawSourceType = meta?.dataset?.sourceType || '';
   const rawMode = meta?.dataset?.mode || '';
@@ -146,6 +147,21 @@
       other: '其他'
     };
     return map[kind] || kind;
+  }
+
+  function buildArtifactLinks(taskId, artifact) {
+    const fragment = document.createDocumentFragment();
+    const download = document.createElement('a');
+    download.href = `/api/tasks/${taskId}/download?artifact_id=${artifact.id}`;
+    download.textContent = '下载';
+    fragment.appendChild(download);
+    fragment.appendChild(document.createTextNode(' '));
+
+    const preview = document.createElement('a');
+    preview.href = `/api/tasks/${taskId}/preview?artifact_id=${artifact.id}`;
+    preview.textContent = '预览';
+    fragment.appendChild(preview);
+    return fragment;
   }
 
   let offset = 0;
@@ -299,11 +315,12 @@
     updateButtons(task);
 
     const list = document.getElementById('artifact-list');
-    list.innerHTML = '';
+    list.textContent = '';
     for (const a of task.artifacts) {
       const when = a.modified_at || a.created_at || '';
       const li = document.createElement('li');
-      li.innerHTML = `[${artifactKindText(a.kind)}] ${a.file_name} (${a.file_size || 0} 字节, ${when}) <a href="/api/tasks/{{ task.id }}/download?artifact_id=${a.id}">下载</a> <a href="/api/tasks/{{ task.id }}/preview?artifact_id=${a.id}">预览</a>`;
+      li.appendChild(document.createTextNode(`[${artifactKindText(a.kind)}] ${a.file_name} (${a.file_size || 0} 字节, ${when}) `));
+      li.appendChild(buildArtifactLinks(taskId, a));
       list.appendChild(li);
     }
 

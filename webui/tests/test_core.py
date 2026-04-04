@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from app.config import get_config
@@ -5,7 +6,7 @@ from app.security import decrypt_text, encrypt_text, encryption_configured, sani
 from app.services.cookie_service import cookie_header_from_json_text, infer_site_from_json_text
 from app.services.env_service import export_settings_to_env, import_env_to_settings
 from app.services.preview_service import preview_text_file
-from app.services.settings_service import DEFAULT_SETTINGS, merged_settings, validate_task_payload
+from app.services.settings_service import DEFAULT_SETTINGS, load_settings, merged_settings, save_settings, validate_task_payload
 
 
 def test_settings_override_priority():
@@ -113,3 +114,70 @@ def test_export_env_settings_uses_bbm_keys():
     assert "BBM_MODEL=openai" in exported
     assert "BBM_CHATGPTAPI_SYS_MSG=sys" in exported
     assert "BBM_CHATGPTAPI_USER_MSG_TEMPLATE=user" in exported
+
+
+def test_import_env_unescapes_newlines():
+    raw = 'BBM_PROMPT_TEXT="line1\\nline2"\n'
+    mapped = import_env_to_settings(raw)
+    assert mapped["prompt_text"] == "line1\nline2"
+
+
+def test_save_settings_rejects_secret_without_key(monkeypatch):
+    monkeypatch.delenv("WEBUI_SECRET_KEY", raising=False)
+    monkeypatch.setenv("WEBUI_REQUIRE_SECRET_KEY", "false")
+    get_config.cache_clear()
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            is_secret INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+    try:
+        try:
+            save_settings(conn, {"openai_key": "secret"})
+        except RuntimeError as exc:
+            assert "WEBUI_SECRET_KEY" in str(exc)
+        else:
+            raise AssertionError("save_settings should reject secret values without WEBUI_SECRET_KEY")
+    finally:
+        conn.close()
+        get_config.cache_clear()
+
+
+def test_save_settings_can_clear_secret(monkeypatch):
+    monkeypatch.delenv("WEBUI_SECRET_KEY", raising=False)
+    monkeypatch.setenv("WEBUI_REQUIRE_SECRET_KEY", "false")
+    get_config.cache_clear()
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            is_secret INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO settings(key, value, is_secret, updated_at) VALUES(?, ?, ?, ?)",
+        ("openai_key", encrypt_text("old-secret"), 1, "now"),
+    )
+
+    try:
+        save_settings(conn, {"openai_key": ""}, clear_keys={"openai_key"})
+        loaded = load_settings(conn)
+        assert loaded["openai_key"] == ""
+    finally:
+        conn.close()
+        get_config.cache_clear()

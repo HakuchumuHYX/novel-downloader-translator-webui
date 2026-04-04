@@ -1,8 +1,7 @@
 import os
 import re
 import shutil
-import ssl
-from asyncio import Semaphore
+from asyncio import Semaphore, as_completed, create_task
 from collections.abc import Callable
 from urllib.parse import urlparse
 
@@ -50,17 +49,11 @@ class Kakuyomu:
         return matched.group(1)
 
     async def async_init(self) -> None:
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
         headers = dict(HEADERS)
         if self.cookie:
             headers["Cookie"] = self.cookie
 
         self.__session: aiohttp.ClientSession = aiohttp.ClientSession(
-            connector=connector,
             headers=headers,
         )
 
@@ -167,10 +160,10 @@ class Kakuyomu:
             await f.write(f"● {title} [第{chapter_index}話]\n")
             await f.write(f"{content}\n")
 
-    async def async_save(self, chapter_index: int, episode_url: str, file_path: str) -> None:
+    async def async_fetch(self, chapter_index: int, episode_url: str, file_path: str) -> tuple[int, str, ChapterTitle, ChapterContent]:
         async with self.__semaphore:
             title, content = await self.__get_chapter_title_content(episode_url)
-            await self.__async_save_txt(title, content, chapter_index, file_path)
+            return chapter_index, file_path, title, content
 
     async def async_download(self, output_dir: str) -> None:
         output_dir = os.path.join(output_dir, self.novel_title)
@@ -183,8 +176,16 @@ class Kakuyomu:
         if self.progress_callback:
             self.progress_callback(downloaded, self.total_chapters)
 
-        for idx, episode_url in enumerate(self.__episode_urls, start=1):
-            await self.async_save(idx, episode_url, os.path.join(output_dir, self.novel_title))
+        tasks = [
+            create_task(self.async_fetch(idx, episode_url, os.path.join(output_dir, self.novel_title)))
+            for idx, episode_url in enumerate(self.__episode_urls, start=1)
+        ]
+        results: list[tuple[int, str, ChapterTitle, ChapterContent]] = []
+        for task in as_completed(tasks):
+            results.append(await task)
             downloaded += 1
             if self.progress_callback:
                 self.progress_callback(downloaded, self.total_chapters)
+
+        for chapter_index, file_path, title, content in sorted(results, key=lambda item: item[0]):
+            await self.__async_save_txt(title, content, chapter_index, file_path)

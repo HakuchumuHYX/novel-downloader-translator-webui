@@ -899,25 +899,48 @@ class TaskWorker(threading.Thread):
                     self._log(task_id, f"Download skipped reason: {txt}", level="warning")
 
     def _resolve_source_file(self, download_root: Path, merged_name: str, save_format: str) -> Path:
+        def _is_source_candidate(path: Path) -> bool:
+            name = path.name.lower()
+            excluded_markers = ("_翻译", "_bilingual", "_temp", "source_metadata", "readme")
+            return not any(marker in name for marker in excluded_markers)
+
         suffix = ".txt" if save_format == "txt" else ".epub"
         merged_name = (merged_name or "").strip()
         if merged_name:
-            merged_candidate = f"{merged_name}{suffix}"
-            found = sorted(download_root.rglob(merged_candidate))
+            merged_candidate = f"{merged_name}{suffix}".lower()
+            found = sorted(
+                [
+                    path
+                    for path in download_root.rglob(f"*{suffix}")
+                    if path.name.lower() == merged_candidate and _is_source_candidate(path)
+                ]
+            )
             if found:
                 return found[0]
 
         if save_format == "txt":
-            txts = sorted(download_root.rglob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
+            txts = sorted(
+                [path for path in download_root.rglob("*.txt") if _is_source_candidate(path)],
+                key=lambda p: p.stat().st_size,
+                reverse=True,
+            )
             if txts:
                 return txts[0]
         else:
-            epubs = sorted(download_root.rglob("*.epub"), key=lambda p: p.stat().st_size, reverse=True)
+            epubs = sorted(
+                [path for path in download_root.rglob("*.epub") if _is_source_candidate(path)],
+                key=lambda p: p.stat().st_size,
+                reverse=True,
+            )
             if epubs:
                 return epubs[0]
 
         all_candidates = sorted(
-            [*download_root.rglob("*.txt"), *download_root.rglob("*.epub")],
+            [
+                path
+                for path in [*download_root.rglob("*.txt"), *download_root.rglob("*.epub")]
+                if _is_source_candidate(path)
+            ],
             key=lambda p: p.stat().st_size,
             reverse=True,
         )
@@ -1010,11 +1033,11 @@ class TaskWorker(threading.Thread):
 
     def _artifact_kind(self, file_path: Path) -> str:
         name = file_path.name.lower()
+        translated_exts = {".txt", ".epub", ".md", ".pdf", ".srt"}
         if (
-            name.endswith("_bilingual.txt")
-            or name.endswith("_bilingual.epub")
-            or name.endswith("_翻译.txt")
-            or name.endswith("_翻译.epub")
+            any(name.endswith(f"_bilingual{ext}") for ext in translated_exts)
+            or any(name.endswith(f"_翻译{ext}") for ext in translated_exts)
+            or any(name.endswith(f"_翻译_temp{ext}") for ext in translated_exts)
         ):
             return "translated"
         if name.endswith("manifest.json"):

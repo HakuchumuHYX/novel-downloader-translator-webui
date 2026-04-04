@@ -50,10 +50,15 @@ def create_task(conn: sqlite3.Connection, payload: dict[str, Any], parent_task_i
     return int(cur.lastrowid)
 
 
-def list_tasks(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
+def count_tasks(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) AS total FROM tasks").fetchone()
+    return int(row["total"] if row else 0)
+
+
+def list_tasks(conn: sqlite3.Connection, limit: int = 100, offset: int = 0) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT * FROM tasks ORDER BY id DESC LIMIT ?",
-        (limit,),
+        "SELECT * FROM tasks ORDER BY id DESC LIMIT ? OFFSET ?",
+        (limit, max(0, offset)),
     ).fetchall()
 
 

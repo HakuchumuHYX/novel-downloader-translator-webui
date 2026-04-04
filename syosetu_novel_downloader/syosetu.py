@@ -1,8 +1,7 @@
 import os
 import re
 import shutil
-import ssl
-from asyncio import Semaphore, gather
+from asyncio import Semaphore, as_completed, create_task, gather
 from collections.abc import Callable
 from enum import Enum
 from urllib.parse import parse_qs, urlparse
@@ -47,14 +46,8 @@ class Syosetu:
         self.__novel_info_soups: list[BeautifulSoup] = []
 
     async def async_init(self):
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
         cookies = {"over18": "yes"} if self.over18 else None
         self.__session: aiohttp.ClientSession = aiohttp.ClientSession(
-            connector=connector,
             cookies=cookies,
         )
 
@@ -238,10 +231,10 @@ class Syosetu:
 
             await f.write(f"{content}\n")
 
-    async def async_save(self, chapter_index: int, file_path) -> None:
+    async def async_fetch(self, chapter_index: int, file_path: str) -> tuple[int, str, ChapterTitle, ChapterContent]:
         async with self.__semaphore:
             title, content = await self.__get_chapter_title_content(chapter_index)
-            await self.__async_save_txt(title, content, chapter_index, file_path)
+            return chapter_index, file_path, title, content
 
     async def async_download(self, output_dir) -> None:
         output_dir = os.path.join(output_dir, self.novel_title)
@@ -262,21 +255,30 @@ class Syosetu:
         if self.progress_callback:
             self.progress_callback(downloaded, self.total_chapters)
 
-        if len(parts) != 0:
-            for k, v in parts.items():
-                print(f"Start download part: {k}")
-                for chapter_index in v:
-                    await self.async_save(chapter_index, os.path.join(output_dir, k))
-                    downloaded += 1
-                    if self.progress_callback:
-                        self.progress_callback(downloaded, self.total_chapters)
-        else:
-            print(f"Start download novel: {self.novel_title}")
-            for chapter_index in self.__get_chapters_range():
-                await self.async_save(chapter_index, os.path.join(output_dir, self.novel_title))
+        async def _run_jobs(jobs):
+            nonlocal downloaded
+            tasks = [create_task(self.async_fetch(chapter_index, file_path)) for chapter_index, file_path in jobs]
+            results: list[tuple[int, str, ChapterTitle, ChapterContent]] = []
+            for task in as_completed(tasks):
+                results.append(await task)
                 downloaded += 1
                 if self.progress_callback:
                     self.progress_callback(downloaded, self.total_chapters)
+            for chapter_index, file_path, title, content in sorted(results, key=lambda item: item[0]):
+                await self.__async_save_txt(title, content, chapter_index, file_path)
+
+        if len(parts) != 0:
+            for k, v in parts.items():
+                print(f"Start download part: {k}")
+                await _run_jobs([(chapter_index, os.path.join(output_dir, k)) for chapter_index in v])
+        else:
+            print(f"Start download novel: {self.novel_title}")
+            await _run_jobs(
+                [
+                    (chapter_index, os.path.join(output_dir, self.novel_title))
+                    for chapter_index in self.__get_chapters_range()
+                ]
+            )
 
 
 class SaveFormat(Enum):

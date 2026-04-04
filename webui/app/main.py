@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .config import get_config
+from .config import AppConfig, get_config
 from .db import get_conn, init_db
 from .routers.system import router as system_router
 from .schemas import (
@@ -32,7 +33,7 @@ from .services.cookie_service import (
     infer_site_from_json_text,
 )
 from .services.env_service import export_settings_to_env, import_env_to_settings
-from .services.preview_service import preview_epub_file, preview_text_file
+from .services.preview_service import preview_epub_file, preview_pdf_file, preview_text_file
 from .services.settings_service import (
     DEFAULT_SETTINGS,
     SOURCE_TYPES,
@@ -48,6 +49,7 @@ from .services.task_service import (
     cancel_task,
     clear_artifacts,
     clear_task_output_paths,
+    count_tasks,
     count_cookie_profile_task_refs,
     create_or_update_cookie_profile,
     create_task,
@@ -71,18 +73,24 @@ from .services.task_service import (
 from .services.worker import TaskWorker
 
 
-app = FastAPI(title="Novel Grab + Translate WebUI")
-cfg = get_config()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
-app.mount("/static", StaticFiles(directory=str(Path(__file__).resolve().parent / "static")), name="static")
-app.include_router(system_router)
-
+cfg: AppConfig | None = None
 worker: TaskWorker | None = None
 
 
-@app.on_event("startup")
-def _startup() -> None:
+def _get_cfg() -> AppConfig:
+    global cfg
+    if cfg is None:
+        cfg = get_config()
+    return cfg
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     global worker
+    global cfg
+
+    cfg = get_config()
 
     if cfg.enforce_secure_defaults:
         if cfg.basic_auth_user == "admin" and cfg.basic_auth_password == "change_me":
@@ -90,9 +98,7 @@ def _startup() -> None:
                 "Insecure default Basic Auth credentials are not allowed when WEBUI_ENFORCE_SECURE_DEFAULTS=true"
             )
         if not encryption_configured():
-            raise RuntimeError(
-                "Valid WEBUI_SECRET_KEY is required when WEBUI_ENFORCE_SECURE_DEFAULTS=true"
-            )
+            raise RuntimeError("Valid WEBUI_SECRET_KEY is required when WEBUI_ENFORCE_SECURE_DEFAULTS=true")
 
     if cfg.require_secret_key and not encryption_configured():
         raise RuntimeError("WEBUI_SECRET_KEY is required when WEBUI_REQUIRE_SECRET_KEY=true")
@@ -102,12 +108,16 @@ def _startup() -> None:
         reconcile_orphan_running_tasks(conn)
     worker = TaskWorker()
     worker.start()
+    try:
+        yield
+    finally:
+        if worker:
+            worker.stop()
 
 
-@app.on_event("shutdown")
-def _shutdown() -> None:
-    if worker:
-        worker.stop()
+app = FastAPI(title="Novel Grab + Translate WebUI", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(Path(__file__).resolve().parent / "static")), name="static")
+app.include_router(system_router)
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -122,7 +132,7 @@ def _parse_bool(value: Any, default: bool = False) -> bool:
 
 def _safe_path(path_str: str) -> Path:
     path = Path(path_str).resolve()
-    data_root = cfg.data_dir.resolve()
+    data_root = _get_cfg().data_dir.resolve()
     try:
         path.relative_to(data_root)
     except ValueError as exc:
@@ -138,9 +148,14 @@ def _find_artifact(conn, task_id: int, artifact_id: int) -> dict[str, Any]:
 
 
 def _preview_file(path: Path, page: int):
-    if path.suffix.lower() == ".epub":
+    suffix = path.suffix.lower()
+    if suffix == ".epub":
         return preview_epub_file(path, page=page)
-    return preview_text_file(path, page=page, per_page=120)
+    if suffix == ".pdf":
+        return preview_pdf_file(path, page=page)
+    if suffix in {".txt", ".md", ".srt"}:
+        return preview_text_file(path, page=page, per_page=120)
+    raise HTTPException(status_code=400, detail=f"Preview is not supported for {suffix or 'this file type'}")
 
 
 def _normalize_parallel_workers(value: Any, fallback: str = "5") -> str:
@@ -189,13 +204,27 @@ def _safe_delete_upload_file(path_str: str) -> bool:
         return False
     target = Path(path_str).resolve()
     try:
-        target.relative_to(cfg.upload_root.resolve())
+        target.relative_to(_get_cfg().upload_root.resolve())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="upload path is outside upload root") from exc
     if not target.exists() or not target.is_file():
         return False
     target.unlink(missing_ok=True)
     return True
+
+
+def _safe_task_file_path(task_id: int, path_str: str) -> Path:
+    path = _safe_path(path_str)
+    task_root = (_get_cfg().task_root / str(task_id)).resolve()
+    try:
+        path.relative_to(task_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="file path is outside current task root") from exc
+    return path
+
+
+def _normalize_page_size(value: int, default: int, maximum: int) -> int:
+    return max(1, min(maximum, value or default))
 
 
 def _can_manage_task(status: str, force: bool) -> tuple[bool, str]:
@@ -207,10 +236,29 @@ def _can_manage_task(status: str, force: bool) -> tuple[bool, str]:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, _: str = Depends(verify_basic_auth)) -> HTMLResponse:
+def index(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    _: str = Depends(verify_basic_auth),
+) -> HTMLResponse:
+    page_size = _normalize_page_size(page_size, default=50, maximum=200)
+    offset = (page - 1) * page_size
     with get_conn() as conn:
-        tasks = [_row_to_dict(row) for row in list_tasks(conn, limit=200)]
-    return templates.TemplateResponse(request, "index.html", {"tasks": tasks})
+        total = count_tasks(conn)
+        tasks = [_row_to_dict(row) for row in list_tasks(conn, limit=page_size, offset=offset)]
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "tasks": tasks,
+            "page": page,
+            "page_size": page_size,
+            "has_prev": page > 1,
+            "has_next": offset + len(tasks) < total,
+            "total": total,
+        },
+    )
 
 
 @app.get("/tasks/new", response_class=HTMLResponse)
@@ -233,10 +281,29 @@ def new_task_page(request: Request, _: str = Depends(verify_basic_auth)) -> HTML
 
 
 @app.get("/tasks/manage", response_class=HTMLResponse)
-def tasks_manage_page(request: Request, _: str = Depends(verify_basic_auth)) -> HTMLResponse:
+def tasks_manage_page(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    _: str = Depends(verify_basic_auth),
+) -> HTMLResponse:
+    page_size = _normalize_page_size(page_size, default=100, maximum=500)
+    offset = (page - 1) * page_size
     with get_conn() as conn:
-        tasks = [_row_to_dict(row) for row in list_tasks(conn, limit=500)]
-    return templates.TemplateResponse(request, "task_manage.html", {"tasks": tasks})
+        total = count_tasks(conn)
+        tasks = [_row_to_dict(row) for row in list_tasks(conn, limit=page_size, offset=offset)]
+    return templates.TemplateResponse(
+        request,
+        "task_manage.html",
+        {
+            "tasks": tasks,
+            "page": page,
+            "page_size": page_size,
+            "has_prev": page > 1,
+            "has_next": offset + len(tasks) < total,
+            "total": total,
+        },
+    )
 
 
 @app.get("/tasks/{task_id}", response_class=HTMLResponse)
@@ -280,7 +347,7 @@ def settings_page(request: Request, _: str = Depends(verify_basic_auth)) -> HTML
             "cookie_profiles": cookie_profiles,
             "templates": templates_list,
             "encryption_configured": encryption_configured(),
-            "secret_key_required": cfg.require_secret_key,
+            "secret_key_required": _get_cfg().require_secret_key,
         },
     )
 
@@ -295,8 +362,16 @@ async def api_save_settings(request: Request, _: str = Depends(verify_basic_auth
         incoming = {k: str(v) for k, v in form.items() if not isinstance(v, UploadFile)}
 
     filtered = {k: v for k, v in incoming.items() if k in DEFAULT_SETTINGS}
+    clear_keys = {
+        key.replace("clear__", "", 1)
+        for key, value in incoming.items()
+        if key.startswith("clear__") and _parse_bool(value, default=False)
+    }
     with get_conn() as conn:
-        save_settings(conn, filtered)
+        try:
+            save_settings(conn, filtered, clear_keys=clear_keys)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JSONResponse({"ok": True})
 
@@ -320,7 +395,10 @@ async def api_import_env(request: Request, _: str = Depends(verify_basic_auth)) 
 
     mapped = import_env_to_settings(raw_text)
     with get_conn() as conn:
-        save_settings(conn, mapped)
+        try:
+            save_settings(conn, mapped)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JSONResponse({"ok": True, "imported_keys": sorted(mapped.keys())})
 
@@ -523,10 +601,11 @@ async def api_create_task(
         payload = {}
 
     upload_path = ""
+    task_id: int | None = None
     if upload_file and upload_file.filename:
         suffix = Path(upload_file.filename).suffix.lower()
         temp_name = f"{uuid.uuid4().hex}{suffix}"
-        target = cfg.upload_root / temp_name
+        target = _get_cfg().upload_root / temp_name
         target.parent.mkdir(parents=True, exist_ok=True)
 
         with target.open("wb") as f:
@@ -583,31 +662,50 @@ async def api_create_task(
     if source_type == "upload":
         task_payload["source_input"] = ""
 
-    validation = validate_task_payload(task_payload)
-    if not validation.ok:
-        raise HTTPException(status_code=400, detail=validation.message)
+    try:
+        validation = validate_task_payload(task_payload)
+        if not validation.ok:
+            raise HTTPException(status_code=400, detail=validation.message)
 
-    with get_conn() as conn:
-        base_settings = load_settings(conn)
-        effective_settings = merged_settings(base_settings, task_payload.get("settings_overrides", {}))
-        settings_validation = validate_translation_settings(effective_settings)
-        if not settings_validation.ok:
-            raise HTTPException(status_code=400, detail=settings_validation.message)
+        with get_conn() as conn:
+            base_settings = load_settings(conn)
+            effective_settings = merged_settings(base_settings, task_payload.get("settings_overrides", {}))
+            settings_validation = validate_translation_settings(effective_settings)
+            if not settings_validation.ok:
+                raise HTTPException(status_code=400, detail=settings_validation.message)
 
-        task_id = create_task(conn, task_payload)
-        template_name = str(form.get("save_as_template", "")).strip()
-        if template_name:
-            create_task_template(conn, template_name, task_payload)
+            task_id = create_task(conn, task_payload)
+            template_name = str(form.get("save_as_template", "")).strip()
+            if template_name:
+                create_task_template(conn, template_name, task_payload)
+    except Exception:
+        if upload_path and task_id is None:
+            _safe_delete_upload_file(upload_path)
+        raise
 
     return JSONResponse({"ok": True, "task_id": task_id})
 
 
 @app.get("/api/tasks")
-def api_list_tasks(_: str = Depends(verify_basic_auth)) -> JSONResponse:
+def api_list_tasks(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    _: str = Depends(verify_basic_auth),
+) -> JSONResponse:
+    page_size = _normalize_page_size(page_size, default=100, maximum=500)
+    offset = (page - 1) * page_size
     with get_conn() as conn:
-        rows = list_tasks(conn, limit=300)
+        total = count_tasks(conn)
+        rows = list_tasks(conn, limit=page_size, offset=offset)
     data = [_row_to_dict(row) for row in rows]
-    return JSONResponse({"items": data})
+    return JSONResponse(
+        {
+            "items": data,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+        }
+    )
 
 
 @app.get("/api/tasks/{task_id}")
@@ -657,15 +755,15 @@ async def api_purge_task(
         clear_task_output_paths(conn, task_id)
         upload_path = str(row["upload_path"] or "")
 
-    task_root = cfg.task_root / str(task_id)
+    task_root = _get_cfg().task_root / str(task_id)
     deleted_paths: list[str] = []
 
     if payload.scope == "task_dir":
-        if _safe_delete_dir(task_root, cfg.task_root):
+        if _safe_delete_dir(task_root, _get_cfg().task_root):
             deleted_paths.append(str(task_root))
     else:
         downloads_dir = task_root / "downloads"
-        if _safe_delete_dir(downloads_dir, cfg.task_root):
+        if _safe_delete_dir(downloads_dir, _get_cfg().task_root):
             deleted_paths.append(str(downloads_dir))
 
     deleted_upload = False
@@ -737,8 +835,8 @@ def api_delete_task(
     deleted_paths: list[str] = []
     if delete_task_dir:
         for tid in deleted_ids:
-            task_root = cfg.task_root / str(tid)
-            if _safe_delete_dir(task_root, cfg.task_root):
+            task_root = _get_cfg().task_root / str(tid)
+            if _safe_delete_dir(task_root, _get_cfg().task_root):
                 deleted_paths.append(str(task_root))
 
     deleted_upload_count = 0
@@ -789,12 +887,12 @@ async def api_batch_purge_tasks(
             errors.append({"task_id": task_id, "reason": reason})
             continue
 
-        task_root = cfg.task_root / str(task_id)
+        task_root = _get_cfg().task_root / str(task_id)
         try:
             if payload.scope == "task_dir":
-                _safe_delete_dir(task_root, cfg.task_root)
+                _safe_delete_dir(task_root, _get_cfg().task_root)
             else:
-                _safe_delete_dir(task_root / "downloads", cfg.task_root)
+                _safe_delete_dir(task_root / "downloads", _get_cfg().task_root)
 
             if payload.delete_upload:
                 _safe_delete_upload_file(str(row["upload_path"] or ""))
@@ -879,7 +977,7 @@ async def api_batch_delete_tasks(
                 continue
 
             for tid in per_deleted:
-                _safe_delete_dir(cfg.task_root / str(tid), cfg.task_root)
+                _safe_delete_dir(_get_cfg().task_root / str(tid), _get_cfg().task_root)
             if payload.delete_upload:
                 for up in upload_paths:
                     _safe_delete_upload_file(up)
@@ -1068,7 +1166,7 @@ def api_task_preview(
             left_path = _safe_path(left_artifact["file_path"])
         elif file:
             left_artifact = {"id": -1, "file_name": Path(file).name}
-            left_path = _safe_path(file)
+            left_path = _safe_task_file_path(task_id, file)
         else:
             raise HTTPException(status_code=400, detail="artifact_id or file is required")
 

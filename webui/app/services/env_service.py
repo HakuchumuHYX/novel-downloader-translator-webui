@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Iterable
 
 
@@ -65,6 +66,7 @@ def parse_env_text(raw_text: str) -> dict[str, str]:
             value.startswith("'") and value.endswith("'")
         ):
             value = value[1:-1]
+        value = value.replace("\\n", "\n")
         result[key] = value
     return result
 
@@ -94,7 +96,7 @@ def export_settings_to_env(settings: dict[str, str], keys: Iterable[str] | None 
         if not env_key:
             continue
         value = str(settings.get(setting_key, ""))
-        if "\n" in value:
-            value = value.replace("\n", "\\n")
+        if value == "" or any(ch in value for ch in (' ', '#', '"', "'", "\n", "\t")):
+            value = json.dumps(value, ensure_ascii=False)
         lines.append(f"{env_key}={value}")
     return "\n".join(lines) + "\n"

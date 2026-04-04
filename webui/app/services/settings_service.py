@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..db import utcnow_iso
-from ..security import decrypt_text, encrypt_text
+from ..security import decrypt_text, encrypt_text, encryption_configured
 
 
 SECRET_SETTING_KEYS = {
@@ -100,12 +100,22 @@ def load_settings(conn: sqlite3.Connection) -> dict[str, str]:
     return data
 
 
-def save_settings(conn: sqlite3.Connection, incoming: dict[str, str]) -> None:
+def save_settings(
+    conn: sqlite3.Connection,
+    incoming: dict[str, str],
+    *,
+    clear_keys: set[str] | None = None,
+) -> None:
     current = load_settings(conn)
     now = utcnow_iso()
+    clear_keys = {key for key in (clear_keys or set()) if key in SECRET_SETTING_KEYS}
 
     for key, value in incoming.items():
         if key not in DEFAULT_SETTINGS:
+            continue
+
+        if key in clear_keys:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
             continue
 
         value = (value or "").strip()
@@ -113,6 +123,8 @@ def save_settings(conn: sqlite3.Connection, incoming: dict[str, str]) -> None:
             value = current.get(key, "")
 
         is_secret = 1 if key in SECRET_SETTING_KEYS else 0
+        if is_secret and value and not encryption_configured():
+            raise RuntimeError("WEBUI_SECRET_KEY 未配置：默认禁止保存 API 密钥等敏感设置。请先配置有效密钥。")
         stored = encrypt_text(value) if is_secret else value
 
         conn.execute(

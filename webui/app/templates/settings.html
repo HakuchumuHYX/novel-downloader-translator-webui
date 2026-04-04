@@ -4,7 +4,7 @@
 <div id="settings-meta" data-encryption-configured="{{ '1' if encryption_configured else '0' }}" style="display:none">
 </div>
 <p class="hint">
-  加密密钥已配置：<strong>{{ "是" if encryption_configured else "否（将使用临时回退密钥）" }}</strong>
+  加密密钥已配置：<strong>{{ "是" if encryption_configured else "否（敏感设置将禁止保存）" }}</strong>
   {% if secret_key_required and not encryption_configured %}
   <span class="danger">WEBUI_REQUIRE_SECRET_KEY=true，但未配置有效 WEBUI_SECRET_KEY，服务应拒绝启动。</span>
   {% endif %}
@@ -12,8 +12,8 @@
 
 {% if not encryption_configured %}
 <p class="danger">
-  未配置有效 WEBUI_SECRET_KEY：为避免误以为 Cookie 已被安全加密存储，WebUI 将默认<strong>禁止保存 Cookie 配置</strong>。
-  请先配置 WEBUI_SECRET_KEY（Fernet key），或在保存 Cookie 时勾选“仍要以不安全回退密钥保存”。
+  未配置有效 WEBUI_SECRET_KEY：WebUI 将默认<strong>禁止保存 Cookie 与 API 密钥等敏感设置</strong>。
+  请先配置 WEBUI_SECRET_KEY（Fernet key）后再保存；Cookie 仍可按下方显式确认走不安全回退方案。
 </p>
 <p class="hint">
   生成密钥示例：<code>python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code>
@@ -101,16 +101,16 @@
   </section>
 
   <section class="panel">
-    <h2>API 密钥（留空表示保持原值）</h2>
-    <label>openai_key <input type="password" name="openai_key" value=""></label>
-    <label>claude_key <input type="password" name="claude_key" value=""></label>
-    <label>gemini_key <input type="password" name="gemini_key" value=""></label>
-    <label>groq_key <input type="password" name="groq_key" value=""></label>
-    <label>xai_key <input type="password" name="xai_key" value=""></label>
-    <label>qwen_key <input type="password" name="qwen_key" value=""></label>
-    <label>caiyun_key <input type="password" name="caiyun_key" value=""></label>
-    <label>deepl_key <input type="password" name="deepl_key" value=""></label>
-    <label>custom_api <input type="password" name="custom_api" value=""></label>
+    <h2>API 密钥（留空表示保持原值，可勾选清空）</h2>
+    <label>openai_key <input type="password" name="openai_key" value=""><input type="checkbox" name="clear__openai_key" value="1"> 清空已有值</label>
+    <label>claude_key <input type="password" name="claude_key" value=""><input type="checkbox" name="clear__claude_key" value="1"> 清空已有值</label>
+    <label>gemini_key <input type="password" name="gemini_key" value=""><input type="checkbox" name="clear__gemini_key" value="1"> 清空已有值</label>
+    <label>groq_key <input type="password" name="groq_key" value=""><input type="checkbox" name="clear__groq_key" value="1"> 清空已有值</label>
+    <label>xai_key <input type="password" name="xai_key" value=""><input type="checkbox" name="clear__xai_key" value="1"> 清空已有值</label>
+    <label>qwen_key <input type="password" name="qwen_key" value=""><input type="checkbox" name="clear__qwen_key" value="1"> 清空已有值</label>
+    <label>caiyun_key <input type="password" name="caiyun_key" value=""><input type="checkbox" name="clear__caiyun_key" value="1"> 清空已有值</label>
+    <label>deepl_key <input type="password" name="deepl_key" value=""><input type="checkbox" name="clear__deepl_key" value="1"> 清空已有值</label>
+    <label>custom_api <input type="password" name="custom_api" value=""><input type="checkbox" name="clear__custom_api" value="1"> 清空已有值</label>
   </section>
 
   <button class="btn" type="submit">保存设置</button>
