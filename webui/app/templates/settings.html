@@ -1,6 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>设置</h1>
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Configuration</p>
+    <h1>设置</h1>
+    <p>集中管理模型、提示词、Cookie 与运行参数。这里的默认值会被后续任务继承，单任务仍可按需覆盖。</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/api/settings/export-env">导出 .env</a>
+    <a class="btn" href="/tasks/new">创建任务</a>
+  </div>
+</section>
+
 <div id="settings-meta" data-encryption-configured="{{ '1' if encryption_configured else '0' }}" style="display:none">
 </div>
 <p class="hint">

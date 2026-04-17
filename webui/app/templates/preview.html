@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>文件预览</h1>
-<p><strong>{{ title }}</strong></p>
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Preview</p>
+    <h1>文件预览</h1>
+    <p><strong>{{ title }}</strong></p>
+  </div>
+</section>
 <div class="actions">
   {% if page > 1 %}
   <a class="btn" href="/api/tasks/{{ task_id }}/preview?artifact_id={{ artifact_id }}{% if compare_artifact_id %}&compare_artifact_id={{ compare_artifact_id }}{% endif %}&page={{ page - 1 }}">上一页</a>

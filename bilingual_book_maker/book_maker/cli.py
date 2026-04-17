@@ -64,8 +64,7 @@ def parse_prompt_arg(prompt_arg):
 
             return prompt
         except Exception as e:
-            print(f"Error parsing PromptDown file: {e}")
-            # Fall through to other parsing methods
+            raise ValueError(f"Failed to parse PromptDown file {prompt_arg}: {e}") from e
 
     # Existing parsing logic for JSON strings and other formats
     if not any(prompt_arg.endswith(ext) for ext in [".json", ".txt", ".md"]):
@@ -90,12 +89,12 @@ def parse_prompt_arg(prompt_arg):
     else:
         raise FileNotFoundError(f"{prompt_arg} not found")
 
-    # if prompt is None or any(c not in prompt["user"] for c in ["{text}", "{language}"]):
-    if prompt is None or any(c not in prompt["user"] for c in ["{text}"]):
-        raise ValueError("prompt must contain `{text}`")
-
+    if prompt is None:
+        raise ValueError("prompt is empty")
     if "user" not in prompt:
         raise ValueError("prompt must contain the key of `user`")
+    if any(c not in prompt["user"] for c in ["{text}"]):
+        raise ValueError("prompt must contain `{text}`")
 
     if (prompt.keys() - {"user", "system"}) != set():
         raise ValueError("prompt can only contain the keys of `user` and `system`")

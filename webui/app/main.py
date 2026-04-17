@@ -205,8 +205,12 @@ def _safe_delete_upload_file(path_str: str) -> bool:
     target = Path(path_str).resolve()
     try:
         target.relative_to(_get_cfg().upload_root.resolve())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="upload path is outside upload root") from exc
+    except ValueError:
+        # Some tasks (for example run-full) intentionally reuse a source file
+        # from a previous task directory rather than from the upload root.
+        # Treat those paths as non-deletable uploads instead of failing the
+        # whole management request after the DB row has already been removed.
+        return False
     if not target.exists() or not target.is_file():
         return False
     target.unlink(missing_ok=True)
@@ -628,12 +632,6 @@ async def api_create_task(
         if key.startswith("override__"):
             settings_overrides[key.replace("override__", "", 1)] = str(value).strip()
 
-    # Always keep task-level parallel_workers valid, so it cannot silently fall back to old global value (e.g. 1).
-    settings_overrides["parallel_workers"] = _normalize_parallel_workers(
-        settings_overrides.get("parallel_workers", ""),
-        fallback="5",
-    )
-
     task_payload = {
         "mode": str(form.get("mode", payload.get("mode", "download_and_translate"))).strip(),
         "source_type": source_type,
@@ -661,6 +659,15 @@ async def api_create_task(
 
     if source_type == "upload":
         task_payload["source_input"] = ""
+
+    parallel_workers_override = settings_overrides.get("parallel_workers", "")
+    if str(parallel_workers_override).strip() != "":
+        settings_overrides["parallel_workers"] = _normalize_parallel_workers(
+            parallel_workers_override,
+            fallback="5",
+        )
+    else:
+        settings_overrides.pop("parallel_workers", None)
 
     try:
         validation = validate_task_payload(task_payload)
@@ -1116,6 +1123,11 @@ def api_run_full_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSON
 @app.post("/api/tasks/{task_id}/cancel")
 def api_cancel_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
     with get_conn() as conn:
+        row = get_task(conn, task_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if row["status"] != "queued":
+            raise HTTPException(status_code=409, detail="Only queued tasks can be canceled")
         ok = cancel_task(conn, task_id)
     return JSONResponse({"ok": ok})
 
@@ -1146,6 +1158,9 @@ def api_resume_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONRe
 @app.get("/api/tasks/{task_id}/artifacts")
 def api_task_artifacts(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
     with get_conn() as conn:
+        row = get_task(conn, task_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Task not found")
         items = [_row_to_dict(row) for row in list_artifacts(conn, task_id)]
     return JSONResponse({"items": items})
 

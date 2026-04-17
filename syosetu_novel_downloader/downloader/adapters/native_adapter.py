@@ -18,12 +18,22 @@ class NativeFallbackAdapter(BackendAdapter):
 
     def supports(self, options: DownloadOptions) -> bool:
         site = options.site if options.site != "auto" else detect_site_from_url(options.url)
-        return site in {"syosetu", "novel18"}
+        if site not in {"syosetu", "novel18"}:
+            return False
+        if options.paid_policy != "skip":
+            return False
+        if site == "novel18" and (options.cookie.strip() or options.cookie_file.strip()):
+            return False
+        return True
 
     def fetch(self, options: DownloadOptions) -> DownloadResult:
         site = options.site if options.site != "auto" else detect_site_from_url(options.url)
         if site not in {"syosetu", "novel18"}:
             raise RuntimeError("Native fallback currently supports syosetu/novel18 only")
+        if options.paid_policy != "skip":
+            raise RuntimeError("Native fallback does not support paid_policy other than skip")
+        if site == "novel18" and (options.cookie.strip() or options.cookie_file.strip()):
+            raise RuntimeError("Native fallback does not support authenticated novel18 cookies")
 
         temp_dir = Path(tempfile.mkdtemp(prefix="_native_job_", dir=options.output_dir))
 

@@ -1,11 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>任务列表</h1>
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Task Center</p>
+    <h1>任务列表</h1>
+    <p>集中查看下载、翻译和回放任务。列表会显示最近任务的状态、来源与执行模式。</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/tasks/new">创建任务</a>
+    {% if has_prev %}<a class="btn" href="/?page={{ page - 1 }}&page_size={{ page_size }}">上一页</a>{% endif %}
+    {% if has_next %}<a class="btn" href="/?page={{ page + 1 }}&page_size={{ page_size }}">下一页</a>{% endif %}
+  </div>
+</section>
+
+<section class="kpi-grid">
+  <article class="kpi-card">
+    <span>总任务数</span>
+    <strong>{{ total }}</strong>
+  </article>
+  <article class="kpi-card">
+    <span>当前页</span>
+    <strong>{{ page }}</strong>
+  </article>
+  <article class="kpi-card">
+    <span>每页容量</span>
+    <strong>{{ page_size }}</strong>
+  </article>
+</section>
+
 <div class="actions">
-  <a class="btn" href="/tasks/new">创建任务</a>
-  <span>共 {{ total }} 条，当前第 {{ page }} 页</span>
-  {% if has_prev %}<a class="btn" href="/?page={{ page - 1 }}&page_size={{ page_size }}">上一页</a>{% endif %}
-  {% if has_next %}<a class="btn" href="/?page={{ page + 1 }}&page_size={{ page_size }}">下一页</a>{% endif %}
+  <span class="hint">共 {{ total }} 条，当前第 {{ page }} 页</span>
 </div>
 <div class="table-wrap">
   <table class="table-responsive">

@@ -1,28 +1,69 @@
 <!doctype html>
 <html lang="zh-CN">
-
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title if title else "小说抓取与翻译 WebUI" }}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-
 <body>
-  <header class="topbar">
-    <div class="brand">小说抓取与翻译</div>
-    <button class="nav-toggle" type="button" onclick="document.body.classList.toggle('nav-open')">菜单</button>
-    <nav>
-      <a href="/">任务列表</a>
-      <a href="/tasks/new">新建任务</a>
-      <a href="/tasks/manage">任务管理</a>
-      <a href="/settings">设置</a>
-      <a href="/system">系统状态</a>
-    </nav>
-  </header>
-  <main class="container">
-    {% block content %}{% endblock %}
-  </main>
-</body>
+  <div class="app-chrome">
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+    <header class="topbar">
+      <div class="brand-group">
+        <a class="brand" href="/">Translator WebUI</a>
+        <p class="brand-note">下载、编排、翻译与产物管理</p>
+      </div>
+      <div class="topbar-actions">
+        <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="topbar-nav">菜单</button>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-live="polite">主题</button>
+      </div>
+      <nav id="topbar-nav" class="topbar-nav">
+        <a href="/">任务列表</a>
+        <a href="/tasks/new">新建任务</a>
+        <a href="/tasks/manage">任务管理</a>
+        <a href="/settings">设置</a>
+        <a href="/system">系统状态</a>
+      </nav>
+    </header>
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
 
+  <script>
+    (function () {
+      const root = document.documentElement;
+      const themeToggle = document.getElementById('theme-toggle');
+      const navToggle = document.getElementById('nav-toggle');
+      const storedTheme = localStorage.getItem('webui-theme');
+      const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+      function applyTheme(theme) {
+        root.setAttribute('data-theme', theme);
+        if (themeToggle) {
+          themeToggle.textContent = theme === 'dark' ? '切换到浅色' : '切换到深色';
+        }
+      }
+
+      applyTheme(storedTheme || (systemDark ? 'dark' : 'light'));
+
+      if (themeToggle) {
+        themeToggle.addEventListener('click', function () {
+          const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+          localStorage.setItem('webui-theme', next);
+          applyTheme(next);
+        });
+      }
+
+      if (navToggle) {
+        navToggle.addEventListener('click', function () {
+          document.body.classList.toggle('nav-open');
+          navToggle.setAttribute('aria-expanded', document.body.classList.contains('nav-open') ? 'true' : 'false');
+        });
+      }
+    })();
+  </script>
+</body>
 </html>

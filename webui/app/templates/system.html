@@ -1,6 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>系统状态</h1>
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Diagnostics</p>
+    <h1>系统状态</h1>
+    <p>查看当前 WebUI 的运行环境、安全配置、依赖命令和磁盘占用，方便快速排查部署问题。</p>
+  </div>
+</section>
+
+<section class="kpi-grid">
+  <article class="kpi-card">
+    <span>加密已配置</span>
+    <strong>{{ "是" if status.encryption_configured else "否" }}</strong>
+  </article>
+  <article class="kpi-card">
+    <span>Secret Key Required</span>
+    <strong>{{ "是" if status.secret_key_required else "否" }}</strong>
+  </article>
+  <article class="kpi-card">
+    <span>运行环境</span>
+    <strong>{{ status.app_env }}</strong>
+  </article>
+</section>
 
 <section class="panel">
   <h2>安全</h2>
@@ -10,7 +31,7 @@
 
 <section class="panel">
   <h2>路径</h2>
-  <ul>
+  <ul class="system-list">
     <li>数据目录（data_dir）：{{ status.paths.data_dir }}</li>
     <li>数据库路径（db_path）：{{ status.paths.db_path }}</li>
     <li>下载器入口（downloader_entry）：{{ status.paths.downloader_entry }}（存在={{ status.paths.downloader_exists }}）</li>
@@ -20,7 +41,7 @@
 
 <section class="panel">
   <h2>命令检查</h2>
-  <ul>
+  <ul class="system-list">
     <li>downloader_python：code={{ status.commands.downloader_python.code }}, ok={{ status.commands.downloader_python.ok }}, output={{ status.commands.downloader_python.output }}</li>
     <li>translator_python：code={{ status.commands.translator_python.code }}, ok={{ status.commands.translator_python.ok }}, output={{ status.commands.translator_python.output }}</li>
     <li>node：code={{ status.commands.node.code }}, ok={{ status.commands.node.ok }}, output={{ status.commands.node.output }}</li>
@@ -30,7 +51,7 @@
 
 <section class="panel">
   <h2>磁盘</h2>
-  <ul>
+  <ul class="system-list">
     <li>总容量：{{ status.disk.total }}</li>
     <li>已使用：{{ status.disk.used }}</li>
     <li>可用：{{ status.disk.free }}</li>

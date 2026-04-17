@@ -118,6 +118,7 @@ docker compose logs -f novel-webui
 ### 5) 挂载权限说明（重要）
 
 compose 中包含 `init-data-permissions` 初始化服务，会先对 `./data` 做权限修复，然后再启动主服务 `novel-webui`。  
+该初始化容器会直接复用 `novel-webui` 构建出来的同一张镜像，不会再额外构建第二张等价镜像。  
 默认主服务使用非 root 用户 `app`（推荐）。
 
 若宿主机挂载权限极端导致仍写入失败，可临时在 `.env` 里改为：

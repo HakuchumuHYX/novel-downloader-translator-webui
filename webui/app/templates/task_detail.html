@@ -1,6 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>任务 #{{ task.id }}</h1>
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Execution</p>
+    <h1>任务 #{{ task.id }}</h1>
+    <p>查看任务状态、进度、日志和产物。这里也是重试、暂停、继续和清理的控制台。</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/">返回列表</a>
+    <a class="btn" href="/tasks/manage">批量管理</a>
+  </div>
+</section>
+
 <div class="grid">
   <section class="panel">
     <h2>任务信息</h2>

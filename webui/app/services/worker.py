@@ -226,6 +226,28 @@ class TaskWorker(threading.Thread):
 
         save_format = payload.get("save_format") or settings.get("save_format", "txt")
         merged_name = payload.get("merged_name") or settings.get("merged_name", "")
+        translating_task = payload.get("mode", "download_and_translate") == "download_and_translate"
+        merge_all_enabled = str(payload.get("merge_all", settings.get("merge_all", "true"))).lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+        # Translation requires a single source file. If an older task/download
+        # only produced multiple volume files and no merged source, force the
+        # worker to redownload with merge enabled instead of translating one
+        # arbitrary candidate.
+        if translating_task and not merge_all_enabled:
+            candidates = self._list_source_candidates(download_root, save_format=save_format)
+            if len(candidates) > 1:
+                self._log(
+                    task_id,
+                    "Existing download outputs are split across multiple files; redownloading with merge enabled for translation.",
+                    level="warning",
+                )
+                return None
+
         try:
             candidate = self._resolve_source_file(
                 download_root,
@@ -392,13 +414,22 @@ class TaskWorker(threading.Thread):
             payload.get("rate_limit") or settings.get("rate_limit", "1.0"),
         ]
 
-        if str(payload.get("merge_all", settings.get("merge_all", "true"))).lower() in {
+        merge_all_enabled = str(payload.get("merge_all", settings.get("merge_all", "true"))).lower() in {
             "1",
             "true",
             "yes",
             "on",
-        }:
+        }
+        translating_task = payload.get("mode", "download_and_translate") == "download_and_translate"
+        effective_merge_all = merge_all_enabled or translating_task
+        if effective_merge_all:
             command.append("--merge-all")
+            if translating_task and not merge_all_enabled:
+                self._log(
+                    task_id,
+                    "Translation task requires a single merged source; enabling merge_all for this download run.",
+                    level="warning",
+                )
 
         if str(payload.get("record_chapter_number", settings.get("record_chapter_number", "false"))).lower() in {
             "1",
@@ -899,6 +930,8 @@ class TaskWorker(threading.Thread):
                     self._log(task_id, f"Download skipped reason: {txt}", level="warning")
 
     def _resolve_source_file(self, download_root: Path, merged_name: str, save_format: str) -> Path:
+        candidates = self._list_source_candidates(download_root, save_format=save_format)
+
         def _is_source_candidate(path: Path) -> bool:
             name = path.name.lower()
             excluded_markers = ("_翻译", "_bilingual", "_temp", "source_metadata", "readme")
@@ -910,44 +943,35 @@ class TaskWorker(threading.Thread):
             merged_candidate = f"{merged_name}{suffix}".lower()
             found = sorted(
                 [
-                    path
-                    for path in download_root.rglob(f"*{suffix}")
-                    if path.name.lower() == merged_candidate and _is_source_candidate(path)
+                    path for path in candidates if path.suffix.lower() == suffix and path.name.lower() == merged_candidate
                 ]
             )
             if found:
                 return found[0]
 
-        if save_format == "txt":
-            txts = sorted(
-                [path for path in download_root.rglob("*.txt") if _is_source_candidate(path)],
-                key=lambda p: p.stat().st_size,
-                reverse=True,
-            )
-            if txts:
-                return txts[0]
-        else:
-            epubs = sorted(
-                [path for path in download_root.rglob("*.epub") if _is_source_candidate(path)],
-                key=lambda p: p.stat().st_size,
-                reverse=True,
-            )
-            if epubs:
-                return epubs[0]
+        preferred = [path for path in candidates if path.suffix.lower() == suffix]
+        if preferred:
+            return preferred[0]
+        if candidates:
+            return candidates[0]
 
-        all_candidates = sorted(
+        raise RuntimeError(f"No source output file found under {download_root}")
+
+    def _list_source_candidates(self, download_root: Path, save_format: str) -> list[Path]:
+        def _is_source_candidate(path: Path) -> bool:
+            name = path.name.lower()
+            excluded_markers = ("_翻译", "_bilingual", "_temp", "source_metadata", "readme")
+            return not any(marker in name for marker in excluded_markers)
+
+        candidates = sorted(
             [
                 path
                 for path in [*download_root.rglob("*.txt"), *download_root.rglob("*.epub")]
                 if _is_source_candidate(path)
             ],
-            key=lambda p: p.stat().st_size,
-            reverse=True,
+            key=lambda p: (p.suffix.lower() != f".{save_format}", -p.stat().st_size, str(p)),
         )
-        if all_candidates:
-            return all_candidates[0]
-
-        raise RuntimeError(f"No source output file found under {download_root}")
+        return candidates
 
     def _resolve_translated_file(self, source_path: Path) -> Path | None:
         stem = source_path.stem
@@ -992,37 +1016,48 @@ class TaskWorker(threading.Thread):
         allowed_ext = {".log", ".json", ".txt", ".epub", ".md", ".pdf", ".srt"}
         ignore_dirs = {"__pycache__", ".pytest_cache", ".cache", "cache", "tmp", "temp"}
 
+        preferred_roots: list[Path] = []
+        downloads_dir = task_root / "downloads"
+        if downloads_dir.exists():
+            preferred_roots.append(downloads_dir)
+        preferred_roots.append(task_root)
+
+        seen_paths: set[Path] = set()
         scored: list[tuple[float, int, Path]] = []
-        for p in task_root.rglob("*"):
-            if not p.is_file():
-                continue
+        for root in preferred_roots:
+            iterator = root.rglob("*") if root != task_root else root.glob("*")
+            for p in iterator:
+                if p in seen_paths:
+                    continue
+                seen_paths.add(p)
+                if not p.is_file():
+                    continue
 
-            # never expose temp cookie files as downloadable artifacts
-            if p.name.startswith(".cookie_"):
-                continue
+                # never expose temp cookie files as downloadable artifacts
+                if p.name.startswith(".cookie_"):
+                    continue
 
-            try:
-                rel = p.relative_to(task_root)
-            except ValueError:
-                # should not happen, but keep it safe
-                continue
+                try:
+                    rel = p.relative_to(task_root)
+                except ValueError:
+                    continue
 
-            # exclude hidden paths and common cache/temp folders
-            if any(part in ignore_dirs for part in rel.parts):
-                continue
-            if any(part.startswith(".") for part in rel.parts):
-                continue
+                # exclude hidden paths and common cache/temp folders
+                if any(part in ignore_dirs for part in rel.parts):
+                    continue
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
 
-            # allowlist by file type/name
-            if p.name != "manifest.json" and p.suffix.lower() not in allowed_ext:
-                continue
+                # allowlist by file type/name
+                if p.name != "manifest.json" and p.suffix.lower() not in allowed_ext:
+                    continue
 
-            try:
-                st = p.stat()
-            except OSError:
-                continue
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
 
-            scored.append((float(st.st_mtime), int(st.st_size), p))
+                scored.append((float(st.st_mtime), int(st.st_size), p))
 
         scored.sort(reverse=True)
         if len(scored) > max_extra:

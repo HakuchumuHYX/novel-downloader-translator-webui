@@ -1,8 +1,6 @@
 services:
   init-data-permissions:
-    build:
-      context: .
-      dockerfile: Dockerfile.webui
+    image: translator_webui-webui:latest
     container_name: novel-webui-init-data-permissions
     user: "0:0"
     command: [ "/bin/sh", "-lc", "mkdir -p /data; chown -R app:app /data || true" ]
@@ -11,6 +9,7 @@ services:
     restart: "no"
 
   novel-webui:
+    image: translator_webui-webui:latest
     build:
       context: .
       dockerfile: Dockerfile.webui

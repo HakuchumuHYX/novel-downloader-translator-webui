@@ -1,6 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>创建任务</h1>
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Compose</p>
+    <h1>创建任务</h1>
+    <p>把下载来源、翻译模式和运行参数组合成一次可追踪的后台任务。创建后会自动进入队列执行。</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/">返回任务列表</a>
+    <a class="btn" href="/settings">打开设置</a>
+  </div>
+</section>
+
 <form id="task-form" enctype="multipart/form-data" method="post" action="/api/tasks">
   <section class="panel">
     <h2>来源</h2>
@@ -113,7 +124,7 @@
           placeholder="{{ settings.accumulated_num }}"></label>
       <label>最大并发线程数（parallel_workers）
         <input type="number" min="1" step="1" name="override__parallel_workers"
-          value="{{ '5' if not settings.parallel_workers or settings.parallel_workers == '1' else settings.parallel_workers }}"
+          value="{{ settings.parallel_workers or '5' }}"
           placeholder="5">
         <div class="hint">TXT 按 batches 并发；EPUB 按 chapters 并发。</div>
       </label>

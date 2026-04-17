@@ -79,6 +79,16 @@ def test_preview_pagination(tmp_path: Path):
     assert page.lines[0] == "line100"
 
 
+def test_preview_page_clamps_to_last_page(tmp_path: Path):
+    f = tmp_path / "a.txt"
+    f.write_text("\n".join([f"line{i}" for i in range(260)]), encoding="utf-8")
+    page = preview_text_file(f, page=99, per_page=100)
+    assert page.page == 3
+    assert page.total_pages == 3
+    assert page.lines[0] == "line200"
+    assert page.lines[-1] == "line259"
+
+
 def test_cookie_json_parse_and_infer_site():
     raw = """[
       {"domain":".kakuyomu.jp","name":"dis_session_r","value":"abc"},

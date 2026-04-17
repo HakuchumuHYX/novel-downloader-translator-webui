@@ -1,6 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>任务管理</h1>
+<section class="page-head">
+    <div>
+        <p class="eyebrow">Operations</p>
+        <h1>任务管理</h1>
+        <p>面向批量清理和批量删除的操作台。适合处理旧任务、回收存储空间和整理任务树。</p>
+    </div>
+    <div class="actions">
+        <a class="btn" href="/">回到任务列表</a>
+        <a class="btn" href="/tasks/new">新建任务</a>
+    </div>
+</section>
+
+<section class="kpi-grid">
+    <article class="kpi-card">
+        <span>总任务数</span>
+        <strong>{{ total }}</strong>
+    </article>
+    <article class="kpi-card">
+        <span>当前页</span>
+        <strong>{{ page }}</strong>
+    </article>
+    <article class="kpi-card">
+        <span>每页容量</span>
+        <strong>{{ page_size }}</strong>
+    </article>
+</section>
 
 <section class="panel">
     <h2>批量操作</h2>

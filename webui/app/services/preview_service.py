@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
@@ -30,25 +31,25 @@ def preview_text_file(path: Path, page: int = 1, per_page: int = 120) -> Preview
     if per_page <= 0:
         per_page = 120
 
-    total_lines = 0
-    with path.open("r", encoding="utf-8", errors="ignore") as handle:
-        for _ in handle:
-            total_lines += 1
-
-    total_pages = max(1, (total_lines + per_page - 1) // per_page)
-    page = max(1, min(page, total_pages))
-    start = (page - 1) * per_page
+    requested_page = max(1, page)
+    start = (requested_page - 1) * per_page
     end = start + per_page
-
     page_lines: list[str] = []
+    total_lines = 0
+    tail_lines = deque(maxlen=per_page)
     with path.open("r", encoding="utf-8", errors="ignore") as handle:
         for index, raw_line in enumerate(handle):
-            if index < start:
-                continue
-            if index >= end:
-                break
-            page_lines.append(raw_line.rstrip("\n"))
+            clean = raw_line.rstrip("\n")
+            total_lines += 1
+            tail_lines.append((index, clean))
+            if start <= index < end:
+                page_lines.append(clean)
 
+    total_pages = max(1, (total_lines + per_page - 1) // per_page)
+    page = max(1, min(requested_page, total_pages))
+    if page != requested_page:
+        last_start = (page - 1) * per_page
+        page_lines = [line for index, line in tail_lines if index >= last_start]
     return PreviewResult(title=path.name, page=page, total_pages=total_pages, lines=_sanitize_lines(page_lines))
 
 

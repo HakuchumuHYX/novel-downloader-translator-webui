@@ -155,31 +155,38 @@ class PDFBookLoader(BaseBookLoader):
             return False
 
     def make_bilingual_book(self):
-        index = 0
-        p_to_save_len = len(self.p_to_save)
-
         try:
             sliced_list = [
                 self.origin_book[i : i + self.batch_size]
                 for i in range(0, len(self.origin_book), self.batch_size)
             ]
-            for i in sliced_list:
+            self.bilingual_result = []
+
+            for batch_index, i in enumerate(sliced_list):
                 # fix the format thanks https://github.com/tudoujunha
                 batch_text = "\n".join(i)
                 if not batch_text.strip():
                     continue
-                if not self.resume or index >= p_to_save_len:
+
+                if self.resume and batch_index < len(self.p_to_save):
+                    temp = self.p_to_save[batch_index]
+                else:
                     try:
                         temp = self.translate_model.translate(batch_text)
                     except Exception as e:
                         print(e)
                         raise Exception("Something is wrong when translate") from e
-                    self.p_to_save.append(temp)
-                    if not self.single_translate:
-                        self.bilingual_result.append(batch_text)
-                    self.bilingual_result.append(temp)
-                index += self.batch_size
-                if self.is_test and index > self.test_num:
+                    if batch_index < len(self.p_to_save):
+                        self.p_to_save[batch_index] = temp
+                    else:
+                        self.p_to_save.append(temp)
+
+                if not self.single_translate:
+                    self.bilingual_result.append(batch_text)
+                self.bilingual_result.append(temp)
+
+                processed_count = (batch_index + 1) * self.batch_size
+                if self.is_test and processed_count > self.test_num:
                     break
 
             txt_out = (
@@ -210,18 +217,17 @@ class PDFBookLoader(BaseBookLoader):
             raise
 
     def _save_temp_book(self):
-        index = 0
         sliced_list = [
             self.origin_book[i : i + self.batch_size]
             for i in range(0, len(self.origin_book), self.batch_size)
         ]
 
-        for i in range(len(sliced_list)):
-            batch_text = "".join(sliced_list[i])
+        self.bilingual_temp_result = []
+        for batch_index, batch in enumerate(sliced_list):
+            batch_text = "".join(batch)
             self.bilingual_temp_result.append(batch_text)
-            if index < len(self.p_to_save):
-                self.bilingual_temp_result.append(self.p_to_save[index])
-            index += 1
+            if batch_index < len(self.p_to_save):
+                self.bilingual_temp_result.append(self.p_to_save[batch_index])
 
         self.save_file(
             f"{Path(self.pdf_name).parent}/{Path(self.pdf_name).stem}_翻译_temp.txt",

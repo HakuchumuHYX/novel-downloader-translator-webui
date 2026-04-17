@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
@@ -74,6 +75,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
 
 
 SOURCE_TYPES = {"upload", "kakuyomu", "syosetu", "syosetu-r18"}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -88,6 +90,7 @@ def _row_to_setting_value(row: sqlite3.Row) -> str:
         try:
             return decrypt_text(raw_value)
         except Exception:
+            logger.warning("Failed to decrypt secret setting '%s'; treating it as empty.", row["key"])
             return ""
     return raw_value
 
