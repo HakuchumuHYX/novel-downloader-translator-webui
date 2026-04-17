@@ -533,7 +533,7 @@ class EPUBBookLoader(BaseBookLoader):
                     if time.time() - start_time > 300:  # 5 minutes
                         raise Exception("Batch translation timed out after 5 minutes")
 
-    def make_bilingual_book(self):
+    def build_book(self):
         self.helper = EPUBBookLoaderHelper(
             self.translate_model,
             self.accumulated_num,

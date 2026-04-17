@@ -85,7 +85,7 @@ class TXTBookLoader(BaseBookLoader):
 
     def _translate_batch(self, batch_text: str) -> str:
         # Keep using the configured loader-level translator instance so that
-        # cli.py post-init model configuration (set_model_list/set_gpt* models ...)
+        # cli.py post-init model configuration (set_model_list/set_default_models ...)
         # is preserved for TXT mode.
         result = self.translate_model.translate(batch_text)
         if result is None:
@@ -117,7 +117,7 @@ class TXTBookLoader(BaseBookLoader):
             # Best effort: checkpoint failure should not abort the whole translation task.
             print(f"warning: failed to checkpoint resume state: {e}")
 
-    def make_bilingual_book(self):
+    def build_book(self):
         batches = self._build_batches()
         total_batches = len(batches)
         self._normalize_saved_progress(total_batches)

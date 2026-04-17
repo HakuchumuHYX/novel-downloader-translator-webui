@@ -1,5 +1,5 @@
 from groq import Groq
-from .chatgptapi_translator import ChatGPTAPI
+from .openai_translator import OpenAITranslator
 from os import linesep
 from itertools import cycle
 
@@ -11,7 +11,7 @@ GROQ_MODEL_LIST = [
 ]
 
 
-class GroqClient(ChatGPTAPI):
+class GroqClient(OpenAITranslator):
     def rotate_model(self):
         if not self.model_list:
             model_list = list(set(GROQ_MODEL_LIST))

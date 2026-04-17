@@ -153,7 +153,7 @@ class PDFBookLoader(BaseBookLoader):
             print(f"create epub failed: {e}")
             return False
 
-    def make_bilingual_book(self):
+    def build_book(self):
         try:
             sliced_list = [
                 self.origin_book[i : i + self.batch_size]

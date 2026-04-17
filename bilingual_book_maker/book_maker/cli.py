@@ -383,7 +383,7 @@ So you are close to reaching the limit. You have to choose your own value, there
     )
     configure_loader_from_options(e, options)
 
-    e.make_bilingual_book()
+    e.build_book()
 
 
 def _run_cli() -> int:

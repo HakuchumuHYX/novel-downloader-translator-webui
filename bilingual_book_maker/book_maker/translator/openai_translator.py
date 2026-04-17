@@ -32,7 +32,7 @@ GPT35_MODEL_LIST = [
 ]
 
 
-class ChatGPTAPI(Base):
+class OpenAITranslator(Base):
     DEFAULT_PROMPT = "Please help me to translate,`{text}` to {language}, please return only translated content not include the origin text"
 
     def __init__(
@@ -403,7 +403,7 @@ class ChatGPTAPI(Base):
             azure_deployment=self.deployment_id,
         )
 
-    def set_gpt35_models(self, ollama_model=""):
+    def set_default_models(self, ollama_model=""):
         if ollama_model:
             self.model_list = cycle([ollama_model])
             return

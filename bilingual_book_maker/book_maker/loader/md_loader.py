@@ -86,7 +86,7 @@ class MarkdownBookLoader(BaseBookLoader):
     def _make_new_book(self, book):
         pass
 
-    def make_bilingual_book(self):
+    def build_book(self):
         try:
             sliced_list = [
                 self.md_paragraphs[i : i + self.batch_size]

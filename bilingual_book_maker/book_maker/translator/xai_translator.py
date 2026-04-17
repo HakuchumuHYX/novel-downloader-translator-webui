@@ -1,12 +1,12 @@
 from openai import OpenAI
-from .chatgptapi_translator import ChatGPTAPI
+from .openai_translator import OpenAITranslator
 
 XAI_MODEL_LIST = [
     "grok-beta",
 ]
 
 
-class XAIClient(ChatGPTAPI):
+class XAIClient(OpenAITranslator):
     def __init__(self, key, language, api_base=None, **kwargs) -> None:
         super().__init__(key, language)
         self.model_list = XAI_MODEL_LIST

@@ -11,7 +11,7 @@ class BaseBookLoader(ABC):
         pass
 
     @abstractmethod
-    def make_bilingual_book(self):
+    def build_book(self):
         pass
 
     @abstractmethod

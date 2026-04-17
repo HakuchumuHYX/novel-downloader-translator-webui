@@ -32,7 +32,7 @@ class LazyTranslatorRegistry(dict):
 
 MODEL_DICT = LazyTranslatorRegistry(
     {
-        "openai": ("book_maker.translator.chatgptapi_translator", "ChatGPTAPI"),
+        "openai": ("book_maker.translator.openai_translator", "OpenAITranslator"),
         "google": ("book_maker.translator.google_translator", "Google"),
         "caiyun": ("book_maker.translator.caiyun_translator", "Caiyun"),
         "deepl": ("book_maker.translator.deepl_translator", "DeepL"),

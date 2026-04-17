@@ -139,7 +139,7 @@ def configure_loader_from_options(loader, options):
         loader.translate_model.set_deployment_id(options.deployment_id)
     if options.model == "openai":
         if options.ollama_model:
-            loader.translate_model.set_gpt35_models(ollama_model=options.ollama_model)
+            loader.translate_model.set_default_models(ollama_model=options.ollama_model)
         else:
             loader.translate_model.set_model_list(_split_model_list(options.model_list) or OPENAI_DEFAULT_MODEL_LIST)
     if options.model == "groq" and options.model_list:

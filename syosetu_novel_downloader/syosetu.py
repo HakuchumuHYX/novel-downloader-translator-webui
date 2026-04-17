@@ -8,7 +8,7 @@ import aiohttp
 from bs4 import BeautifulSoup  # type: ignore
 
 from custom_typing import ChapterContent, ChapterRange, ChapterTitle, NovelTitle, PartTitle
-from downloader.legacy_async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
+from downloader.async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
 
 
 MAIN_URL: str = "https://ncode.syosetu.com"
@@ -47,7 +47,6 @@ class Syosetu:
         if not self.__novel_info_soups:
             raise RuntimeError("Could not fetch novel info pages")
 
-        # Keep page1 soup for compatibility with existing helpers.
         self.__novel_info_soup = self.__novel_info_soups[0]
         self.novel_title = self.__get_novel_title()
         self.author = self.__get_novel_author()

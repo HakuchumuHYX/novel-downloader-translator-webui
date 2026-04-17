@@ -124,8 +124,8 @@ def postprocess_download_output(args: argparse.Namespace, result: DownloadResult
 
     if args.merge_all:
         merged_filename = (args.merged_name or "").strip()
-        if not merged_filename or merged_filename == "full_book":
-            merged_filename = sanitize_filename(result.meta.title or "", default="full_book")
+        if not merged_filename:
+            merged_filename = sanitize_filename(result.meta.title or "", default="book")
         if not merged_filename.endswith(".txt"):
             merged_filename = f"{merged_filename}.txt"
         try:

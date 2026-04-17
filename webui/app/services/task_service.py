@@ -256,7 +256,7 @@ def set_task_finished(
     *,
     status: str,
     download_output_dir: str = "",
-    source_full_book_path: str = "",
+    source_output_path: str = "",
     translated_output_path: str = "",
     error_message: str = "",
     error_code: str = "",
@@ -267,7 +267,7 @@ def set_task_finished(
         SET status = ?,
             finished_at = ?,
             download_output_dir = ?,
-            source_full_book_path = ?,
+            source_output_path = ?,
             translated_output_path = ?,
             error_message = ?,
             error_code = ?,
@@ -278,7 +278,7 @@ def set_task_finished(
             status,
             utcnow_iso(),
             download_output_dir,
-            source_full_book_path,
+            source_output_path,
             translated_output_path,
             error_message,
             error_code,
@@ -511,7 +511,7 @@ def clear_task_output_paths(conn: sqlite3.Connection, task_id: int) -> None:
         """
         UPDATE tasks
         SET download_output_dir = '',
-            source_full_book_path = '',
+            source_output_path = '',
             translated_output_path = ''
         WHERE id = ?
         """,

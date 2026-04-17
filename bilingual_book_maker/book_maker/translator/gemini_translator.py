@@ -27,8 +27,8 @@ safety_settings = {
 }
 
 PROMPT_ENV_MAP = {
-    "user": "BBM_GEMINIAPI_USER_MSG_TEMPLATE",
-    "system": "BBM_GEMINIAPI_SYS_MSG",
+    "user": "BBM_GEMINI_PROMPT_USER",
+    "system": "BBM_GEMINI_PROMPT_SYSTEM",
 }
 
 GEMINIFLASH_MODEL_LIST = [

@@ -157,7 +157,7 @@ class SRTBookLoader(BaseBookLoader):
         sliced_list.append((begin_index, len(self.blocks), sliced_text))
         return sliced_list
 
-    def make_bilingual_book(self):
+    def build_book(self):
         if self.accumulated_num > 512:
             print(f"{self.accumulated_num} is too large, shrink it to 512.")
             self.accumulated_num = 512

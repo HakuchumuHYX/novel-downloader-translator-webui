@@ -194,13 +194,13 @@ class TaskWorker(threading.Thread):
         payload: dict[str, Any],
         settings: dict[str, str],
         download_root: Path,
-        source_full_book_path: str,
+        source_output_path: str,
     ) -> Path | None:
-        source_full_book_path = (source_full_book_path or "").strip()
-        if source_full_book_path:
-            candidate = Path(source_full_book_path)
+        source_output_path = (source_output_path or "").strip()
+        if source_output_path:
+            candidate = Path(source_output_path)
             if file_has_content(candidate):
-                self._log(task_id, f"Resuming with existing source_full_book_path: {candidate}")
+                self._log(task_id, f"Resuming with existing source_output_path: {candidate}")
                 return candidate
 
         save_format = payload.get("save_format") or settings.get("save_format", "txt")
@@ -271,7 +271,7 @@ class TaskWorker(threading.Thread):
                 payload,
                 effective_settings,
                 download_root,
-                str(task["source_full_book_path"] or ""),
+                str(task["source_output_path"] or ""),
             )
             if reused_source is not None:
                 source_path = reused_source
@@ -337,7 +337,7 @@ class TaskWorker(threading.Thread):
                 task_id,
                 status="succeeded",
                 download_output_dir=str(download_root),
-                source_full_book_path=str(source_path),
+                source_output_path=str(source_path),
                 translated_output_path=str(translated_path) if translated_path else "",
                 error_message="",
                 error_code="",

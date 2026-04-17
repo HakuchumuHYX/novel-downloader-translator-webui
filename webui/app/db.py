@@ -46,6 +46,13 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl_suffix
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_suffix}")
 
 
+def _rename_column_if_exists(conn: sqlite3.Connection, table: str, old_name: str, new_name: str) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if new_name in existing or old_name not in existing:
+        return
+    conn.execute(f"ALTER TABLE {table} RENAME COLUMN {old_name} TO {new_name}")
+
+
 def init_db() -> None:
     cfg = get_config()
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
@@ -89,7 +96,7 @@ def init_db() -> None:
                 cookie_profile_id INTEGER,
                 payload_json TEXT NOT NULL,
                 download_output_dir TEXT NOT NULL DEFAULT '',
-                source_full_book_path TEXT NOT NULL DEFAULT '',
+                source_output_path TEXT NOT NULL DEFAULT '',
                 translated_output_path TEXT NOT NULL DEFAULT '',
                 error_message TEXT NOT NULL DEFAULT '',
                 parent_task_id INTEGER,
@@ -135,6 +142,7 @@ def init_db() -> None:
         _ensure_column(conn, "tasks", "stop_requested", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "tasks", "pause_requested", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "tasks", "stage", "TEXT NOT NULL DEFAULT ''")
+        _rename_column_if_exists(conn, "tasks", "source_full_book_path", "source_output_path")
         _ensure_column(conn, "tasks", "download_current", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "tasks", "download_total", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "tasks", "translate_current", "INTEGER NOT NULL DEFAULT 0")

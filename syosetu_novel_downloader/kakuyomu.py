@@ -8,7 +8,7 @@ import aiohttp
 from bs4 import BeautifulSoup  # type: ignore
 
 from custom_typing import ChapterContent, ChapterTitle, NovelTitle
-from downloader.legacy_async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
+from downloader.async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
 
 
 class Kakuyomu:

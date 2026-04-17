@@ -388,7 +388,7 @@ def api_run_full_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSON
         payload["translate_mode"] = "full"
 
         reused_source = False
-        source_path_raw = str(row["source_full_book_path"] or "").strip()
+        source_path_raw = str(row["source_output_path"] or "").strip()
         if source_path_raw:
             source_path = safe_path(source_path_raw, get_app_config())
             if source_path.exists() and source_path.is_file():

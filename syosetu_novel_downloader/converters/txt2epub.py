@@ -76,7 +76,7 @@ def merge_chapters_to_txt(chapters: Iterable, output_path: str, record_chapter_n
     return output_path
 
 
-def merge_txt_files(input_dir, merged_filename="full_book.txt"):
+def merge_txt_files(input_dir, merged_filename="book.txt"):
     all_txt_files = [f for f in os.listdir(input_dir) if f.endswith(".txt")]
     if not all_txt_files:
         raise FileNotFoundError(f"No txt files found in {input_dir}")
