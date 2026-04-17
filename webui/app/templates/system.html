@@ -21,12 +21,19 @@
     <span>运行环境</span>
     <strong>{{ status.app_env }}</strong>
   </article>
+  <article class="kpi-card">
+    <span>磁盘占用</span>
+    <strong>{{ status.disk.usage_percent }}%</strong>
+  </article>
 </section>
 
 <section class="panel">
   <h2>安全</h2>
-  <p>已配置有效密钥：<strong>{{ status.encryption_configured }}</strong></p>
-  <p>是否强制要求密钥：<strong>{{ status.secret_key_required }}</strong></p>
+  <ul class="system-list">
+    <li>已配置有效密钥：<strong>{{ status.encryption_configured }}</strong></li>
+    <li>是否强制要求密钥：<strong>{{ status.secret_key_required }}</strong></li>
+    <li>是否启用 secure defaults：<strong>{{ status.enforce_secure_defaults }}</strong></li>
+  </ul>
 </section>
 
 <section class="panel">
@@ -51,6 +58,15 @@
 
 <section class="panel">
   <h2>磁盘</h2>
+  <div class="disk-meter">
+    <div class="disk-meter-head">
+      <strong>{{ status.disk.usage_summary }}</strong>
+      <span class="muted">剩余 {{ status.disk.free }}</span>
+    </div>
+    <div class="meter-track" aria-hidden="true">
+      <div class="meter-fill" style="width: {{ status.disk.usage_percent }}%"></div>
+    </div>
+  </div>
   <ul class="system-list">
     <li>总容量：{{ status.disk.total }}</li>
     <li>已使用：{{ status.disk.used }}</li>

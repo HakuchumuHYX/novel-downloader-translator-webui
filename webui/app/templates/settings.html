@@ -14,6 +14,20 @@
 
 <div id="settings-meta" data-encryption-configured="{{ '1' if encryption_configured else '0' }}" style="display:none">
 </div>
+<section class="kpi-grid">
+  <article class="kpi-card">
+    <span>加密状态</span>
+    <strong>{{ "已启用" if encryption_configured else "未启用" }}</strong>
+  </article>
+  <article class="kpi-card">
+    <span>Cookie 配置</span>
+    <strong>{{ cookie_profiles|length }}</strong>
+  </article>
+  <article class="kpi-card">
+    <span>任务模板</span>
+    <strong>{{ templates|length }}</strong>
+  </article>
+</section>
 <p class="hint">
   加密密钥已配置：<strong>{{ "是" if encryption_configured else "否（敏感设置将禁止保存）" }}</strong>
   {% if secret_key_required and not encryption_configured %}
@@ -41,16 +55,18 @@
   </form>
 </section>
 
-<form id="settings-form" method="post" action="/api/settings">
+<form id="settings-form" method="post" action="/api/settings" class="section-stack">
   <section class="panel">
     <h2>翻译后端</h2>
-    <label>模型（model） <input type="text" name="model" value="{{ settings.model }}"></label>
-    <label>模型列表（model_list） <input type="text" name="model_list" value="{{ settings.model_list }}"></label>
-    <label>接口地址（api_base） <input type="text" name="api_base" value="{{ settings.api_base }}"></label>
-    <label>目标语言（language） <input type="text" name="language" value="{{ settings.language }}"></label>
-    <label>源语言（source_lang） <input type="text" name="source_lang" value="{{ settings.source_lang }}"></label>
-    <label>温度（temperature） <input type="text" name="temperature" value="{{ settings.temperature }}"></label>
-    <label>部署 ID（deployment_id） <input type="text" name="deployment_id" value="{{ settings.deployment_id }}"></label>
+    <div class="field-grid">
+      <label>模型（model） <input type="text" name="model" value="{{ settings.model }}"></label>
+      <label>模型列表（model_list） <input type="text" name="model_list" value="{{ settings.model_list }}"></label>
+      <label>接口地址（api_base） <input type="text" name="api_base" value="{{ settings.api_base }}"></label>
+      <label>目标语言（language） <input type="text" name="language" value="{{ settings.language }}"></label>
+      <label>源语言（source_lang） <input type="text" name="source_lang" value="{{ settings.source_lang }}"></label>
+      <label>温度（temperature） <input type="text" name="temperature" value="{{ settings.temperature }}"></label>
+      <label>部署 ID（deployment_id） <input type="text" name="deployment_id" value="{{ settings.deployment_id }}"></label>
+    </div>
   </section>
 
   <section class="panel">
@@ -65,50 +81,54 @@
 
   <section class="panel">
     <h2>运行参数</h2>
-    <label>测试模式（test） <input type="text" name="test" value="{{ settings.test }}"></label>
-    <label>测试条数（test_num） <input type="text" name="test_num" value="{{ settings.test_num }}"></label>
-    <label>断点续跑（resume） <input type="text" name="resume" value="{{ settings.resume }}"></label>
-    <label>累计段数（accumulated_num） <input type="text" name="accumulated_num"
-        value="{{ settings.accumulated_num }}"></label>
-    <label>最大并发线程数（parallel_workers）
-      <input type="text" name="parallel_workers" value="{{ settings.parallel_workers }}">
-    </label>
+    <div class="field-grid">
+      <label>测试模式（test） <input type="text" name="test" value="{{ settings.test }}"></label>
+      <label>测试条数（test_num） <input type="text" name="test_num" value="{{ settings.test_num }}"></label>
+      <label>断点续跑（resume） <input type="text" name="resume" value="{{ settings.resume }}"></label>
+      <label>累计段数（accumulated_num） <input type="text" name="accumulated_num"
+          value="{{ settings.accumulated_num }}"></label>
+      <label>最大并发线程数（parallel_workers）
+        <input type="text" name="parallel_workers" value="{{ settings.parallel_workers }}">
+      </label>
+      <label>上下文模式（use_context） <input type="text" name="use_context" value="{{ settings.use_context }}"></label>
+      <label>上下文段落上限（context_paragraph_limit） <input type="text" name="context_paragraph_limit"
+          value="{{ settings.context_paragraph_limit }}"></label>
+      <label>分块大小（block_size） <input type="text" name="block_size" value="{{ settings.block_size }}"></label>
+      <label>翻译风格（translation_style） <input type="text" name="translation_style"
+          value="{{ settings.translation_style }}"></label>
+      <label>批量大小（batch_size） <input type="text" name="batch_size" value="{{ settings.batch_size }}"></label>
+      <label>翻译标签（translate_tags） <input type="text" name="translate_tags" value="{{ settings.translate_tags }}"></label>
+      <label>排除标签（exclude_translate_tags） <input type="text" name="exclude_translate_tags"
+          value="{{ settings.exclude_translate_tags }}"></label>
+      <label>允许导航字符串（allow_navigable_strings） <input type="text" name="allow_navigable_strings"
+          value="{{ settings.allow_navigable_strings }}"></label>
+      <label>请求间隔（interval） <input type="text" name="interval" value="{{ settings.interval }}"></label>
+    </div>
     <p class="hint">说明：TXT 翻译时按 batches 并发；EPUB 翻译时按章节（chapters）并发。</p>
-    <label>上下文模式（use_context） <input type="text" name="use_context" value="{{ settings.use_context }}"></label>
-    <label>上下文段落上限（context_paragraph_limit） <input type="text" name="context_paragraph_limit"
-        value="{{ settings.context_paragraph_limit }}"></label>
-    <label>分块大小（block_size） <input type="text" name="block_size" value="{{ settings.block_size }}"></label>
-    <label>翻译风格（translation_style） <input type="text" name="translation_style"
-        value="{{ settings.translation_style }}"></label>
-    <label>批量大小（batch_size） <input type="text" name="batch_size" value="{{ settings.batch_size }}"></label>
-    <label>翻译标签（translate_tags） <input type="text" name="translate_tags" value="{{ settings.translate_tags }}"></label>
-    <label>排除标签（exclude_translate_tags） <input type="text" name="exclude_translate_tags"
-        value="{{ settings.exclude_translate_tags }}"></label>
-    <label>允许导航字符串（allow_navigable_strings） <input type="text" name="allow_navigable_strings"
-        value="{{ settings.allow_navigable_strings }}"></label>
-    <label>请求间隔（interval） <input type="text" name="interval" value="{{ settings.interval }}"></label>
   </section>
 
   <section class="panel">
     <h2>网络 / 下载 / Worker</h2>
-    <label>代理（proxy） <input type="text" name="proxy" value="{{ settings.proxy }}"></label>
-    <label>超时（timeout） <input type="text" name="timeout" value="{{ settings.timeout }}"></label>
-    <label>重试次数（retries） <input type="text" name="retries" value="{{ settings.retries }}"></label>
-    <label>限速（rate_limit） <input type="text" name="rate_limit" value="{{ settings.rate_limit }}"></label>
-    <label>下载后端（backend） <input type="text" name="backend" value="{{ settings.backend }}"></label>
-    <label>付费章节策略（paid_policy） <input type="text" name="paid_policy" value="{{ settings.paid_policy }}"></label>
-    <label>输出格式（save_format） <input type="text" name="save_format" value="{{ settings.save_format }}"></label>
-    <label>合并输出（merge_all） <input type="text" name="merge_all" value="{{ settings.merge_all }}"></label>
-    <label>合并文件名（merged_name） <input type="text" name="merged_name"
-        value="{{ '' if settings.merged_name == 'full_book' else settings.merged_name }}"></label>
+    <div class="field-grid">
+      <label>代理（proxy） <input type="text" name="proxy" value="{{ settings.proxy }}"></label>
+      <label>超时（timeout） <input type="text" name="timeout" value="{{ settings.timeout }}"></label>
+      <label>重试次数（retries） <input type="text" name="retries" value="{{ settings.retries }}"></label>
+      <label>限速（rate_limit） <input type="text" name="rate_limit" value="{{ settings.rate_limit }}"></label>
+      <label>下载后端（backend） <input type="text" name="backend" value="{{ settings.backend }}"></label>
+      <label>付费章节策略（paid_policy） <input type="text" name="paid_policy" value="{{ settings.paid_policy }}"></label>
+      <label>输出格式（save_format） <input type="text" name="save_format" value="{{ settings.save_format }}"></label>
+      <label>合并输出（merge_all） <input type="text" name="merge_all" value="{{ settings.merge_all }}"></label>
+      <label>合并文件名（merged_name） <input type="text" name="merged_name"
+          value="{{ '' if settings.merged_name == 'full_book' else settings.merged_name }}"></label>
+      <label>记录章节号（record_chapter_number） <input type="text" name="record_chapter_number"
+          value="{{ settings.record_chapter_number }}"></label>
+      <label>进程总超时（process_timeout） <input type="text" name="process_timeout"
+          value="{{ settings.process_timeout }}"></label>
+      <label>清理保留天数（cleanup_days） <input type="text" name="cleanup_days" value="{{ settings.cleanup_days }}"></label>
+      <label>清理状态（cleanup_statuses） <input type="text" name="cleanup_statuses"
+          value="{{ settings.cleanup_statuses }}"></label>
+    </div>
     <p class="hint">留空将自动使用作品标题作为合并文件名。</p>
-    <label>记录章节号（record_chapter_number） <input type="text" name="record_chapter_number"
-        value="{{ settings.record_chapter_number }}"></label>
-    <label>进程总超时（process_timeout） <input type="text" name="process_timeout"
-        value="{{ settings.process_timeout }}"></label>
-    <label>清理保留天数（cleanup_days） <input type="text" name="cleanup_days" value="{{ settings.cleanup_days }}"></label>
-    <label>清理状态（cleanup_statuses） <input type="text" name="cleanup_statuses"
-        value="{{ settings.cleanup_statuses }}"></label>
   </section>
 
   <section class="panel">

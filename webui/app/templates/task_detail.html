@@ -12,30 +12,84 @@
   </div>
 </section>
 
+<section class="kpi-grid">
+  <article class="kpi-card">
+    <span>任务状态</span>
+    <strong id="status-kpi">
+      {% if task.status == 'queued' %}排队中
+      {% elif task.status == 'running' %}运行中
+      {% elif task.status == 'succeeded' %}成功
+      {% elif task.status == 'failed' %}失败
+      {% elif task.status == 'canceled' %}已取消
+      {% elif task.status == 'paused' %}已暂停
+      {% else %}{{ task.status }}
+      {% endif %}
+    </strong>
+  </article>
+  <article class="kpi-card">
+    <span>来源类型</span>
+    <strong id="source-kpi">{{ task.source_type }}</strong>
+  </article>
+  <article class="kpi-card">
+    <span>任务模式</span>
+    <strong id="mode-kpi">{{ task.mode }}</strong>
+  </article>
+  <article class="kpi-card">
+    <span>产物数量</span>
+    <strong id="artifact-count">{{ artifacts|length }}</strong>
+  </article>
+</section>
+
 <div class="grid">
   <section class="panel">
     <h2>任务信息</h2>
-    <p>
-      状态：
-      <span id="status" class="status status-{{ task.status }}">
-        {% if task.status == 'queued' %}排队中
-        {% elif task.status == 'running' %}运行中
-        {% elif task.status == 'succeeded' %}成功
-        {% elif task.status == 'failed' %}失败
-        {% elif task.status == 'canceled' %}已取消
-        {% elif task.status == 'paused' %}已暂停
-        {% else %}{{ task.status }}
-        {% endif %}
-      </span>
-    </p>
-    <p>来源：<span id="source_type"></span></p>
-    <p>模式：<span id="mode"></span></p>
-    <p>最大并发线程数（parallel_workers）：<span id="parallel_workers">{{ task.parallel_workers }}</span></p>
-    <p>错误码：<code id="error_code">{{ task.error_code }}</code></p>
-    <p>错误信息：<code id="error">{{ task.error_message }}</code></p>
-    <p>创建时间：{{ task.created_at }}</p>
-    <p>开始时间：{{ task.started_at }}</p>
-    <p>结束时间：{{ task.finished_at }}</p>
+    <div class="info-grid">
+      <div class="info-card">
+        <span class="muted">状态</span>
+        <div><span id="status" class="status status-{{ task.status }}">
+          {% if task.status == 'queued' %}排队中
+          {% elif task.status == 'running' %}运行中
+          {% elif task.status == 'succeeded' %}成功
+          {% elif task.status == 'failed' %}失败
+          {% elif task.status == 'canceled' %}已取消
+          {% elif task.status == 'paused' %}已暂停
+          {% else %}{{ task.status }}
+          {% endif %}
+        </span></div>
+      </div>
+      <div class="info-card">
+        <span class="muted">来源</span>
+        <strong id="source_type"></strong>
+      </div>
+      <div class="info-card">
+        <span class="muted">模式</span>
+        <strong id="mode"></strong>
+      </div>
+      <div class="info-card">
+        <span class="muted">parallel_workers</span>
+        <strong id="parallel_workers">{{ task.parallel_workers }}</strong>
+      </div>
+      <div class="info-card">
+        <span class="muted">错误码</span>
+        <code id="error_code">{{ task.error_code or '无' }}</code>
+      </div>
+      <div class="info-card info-card-wide">
+        <span class="muted">错误信息</span>
+        <code id="error">{{ task.error_message or '无' }}</code>
+      </div>
+      <div class="info-card">
+        <span class="muted">创建时间</span>
+        <strong>{{ task.created_at }}</strong>
+      </div>
+      <div class="info-card">
+        <span class="muted">开始时间</span>
+        <strong>{{ task.started_at or '未开始' }}</strong>
+      </div>
+      <div class="info-card">
+        <span class="muted">结束时间</span>
+        <strong>{{ task.finished_at or '进行中' }}</strong>
+      </div>
+    </div>
 
     <h3>进度</h3>
     <div class="progress-block">
@@ -78,11 +132,18 @@
     <ul id="artifact-list">
       {% for a in artifacts %}
       <li>
-        [{% if a.kind == 'source' %}原文{% elif a.kind == 'translated' %}译文{% elif a.kind == 'manifest' %}清单{% elif a.kind
-        == 'log' %}日志{% elif a.kind == 'other' %}其他{% else %}{{ a.kind }}{% endif %}] {{ a.file_name }}
-        ({{ a.file_size }} 字节, {{ a.modified_at or a.created_at }})
-        <a href="/api/tasks/{{ task.id }}/download?artifact_id={{ a.id }}">下载</a>
-        <a href="/api/tasks/{{ task.id }}/preview?artifact_id={{ a.id }}">预览</a>
+        <div>
+          <strong>
+            {% if a.kind == 'source' %}原文{% elif a.kind == 'translated' %}译文{% elif a.kind == 'manifest' %}清单{% elif a.kind
+            == 'log' %}日志{% elif a.kind == 'other' %}其他{% else %}{{ a.kind }}{% endif %}
+          </strong>
+          {{ a.file_name }}
+        </div>
+        <div class="artifact-meta">{{ a.file_size }} 字节, {{ a.modified_at or a.created_at }}</div>
+        <div class="actions">
+          <a href="/api/tasks/{{ task.id }}/download?artifact_id={{ a.id }}">下载</a>
+          <a href="/api/tasks/{{ task.id }}/preview?artifact_id={{ a.id }}">预览</a>
+        </div>
       </li>
       {% endfor %}
     </ul>
@@ -319,6 +380,10 @@
     document.getElementById('parallel_workers').textContent = task.parallel_workers || '';
     document.getElementById('error').textContent = task.error_message || '';
     document.getElementById('error_code').textContent = task.error_code || '';
+    document.getElementById('status-kpi').textContent = statusText(task.status);
+    document.getElementById('source-kpi').textContent = sourceText(task.source_type);
+    document.getElementById('mode-kpi').textContent = modeText(task.mode);
+    document.getElementById('artifact-count').textContent = String((task.artifacts || []).length);
 
     setProgress('download-progress', 'download-progress-text', task.download_current, task.download_total);
     setProgress('translate-progress', 'translate-progress-text', task.translate_current, task.translate_total);
@@ -330,8 +395,19 @@
     for (const a of task.artifacts) {
       const when = a.modified_at || a.created_at || '';
       const li = document.createElement('li');
-      li.appendChild(document.createTextNode(`[${artifactKindText(a.kind)}] ${a.file_name} (${a.file_size || 0} 字节, ${when}) `));
-      li.appendChild(buildArtifactLinks(taskId, a));
+      const title = document.createElement('div');
+      title.innerHTML = `<strong>${artifactKindText(a.kind)}</strong> ${a.file_name}`;
+      li.appendChild(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'artifact-meta';
+      meta.textContent = `${a.file_size || 0} 字节, ${when}`;
+      li.appendChild(meta);
+
+      const links = document.createElement('div');
+      links.className = 'actions';
+      links.appendChild(buildArtifactLinks(taskId, a));
+      li.appendChild(links);
       list.appendChild(li);
     }
 

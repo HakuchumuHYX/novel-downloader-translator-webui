@@ -8,6 +8,18 @@ from ..config import get_config
 from ..security import encryption_configured
 
 
+def _format_bytes(value: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    size = float(max(0, value))
+    unit_index = 0
+    while size >= 1024.0 and unit_index < len(units) - 1:
+        size /= 1024.0
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(size)} {units[unit_index]}"
+    return f"{size:.1f} {units[unit_index]}"
+
+
 def _run_cmd_status(command: list[str], cwd: str | None = None) -> dict[str, Any]:
     try:
         proc = subprocess.run(
@@ -28,6 +40,7 @@ def _run_cmd_status(command: list[str], cwd: str | None = None) -> dict[str, Any
 def collect_system_status() -> dict[str, Any]:
     cfg = get_config()
     disk = shutil.disk_usage(cfg.data_dir)
+    usage_percent = round((disk.used / disk.total) * 100, 1) if disk.total > 0 else 0.0
     return {
         "encryption_configured": encryption_configured(),
         "secret_key_required": cfg.require_secret_key,
@@ -48,8 +61,13 @@ def collect_system_status() -> dict[str, Any]:
             "npm": _run_cmd_status(["npm", "--version"]),
         },
         "disk": {
-            "total": disk.total,
-            "used": disk.used,
-            "free": disk.free,
+            "total_bytes": disk.total,
+            "used_bytes": disk.used,
+            "free_bytes": disk.free,
+            "total": _format_bytes(disk.total),
+            "used": _format_bytes(disk.used),
+            "free": _format_bytes(disk.free),
+            "usage_percent": usage_percent,
+            "usage_summary": f"{_format_bytes(disk.used)} / {_format_bytes(disk.total)} ({usage_percent:.1f}%)",
         },
     }
