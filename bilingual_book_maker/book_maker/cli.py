@@ -1,107 +1,12 @@
 import argparse
-import json
 import os
 import sys
 import traceback
-from os import environ as env
 
+from book_maker.cli_support import configure_loader_from_options, parse_prompt_arg, resolve_api_key
 from book_maker.loader import BOOK_LOADER_DICT
 from book_maker.translator import MODEL_DICT
 from book_maker.utils import LANGUAGES, TO_LANGUAGE_CODE
-
-
-def parse_prompt_arg(prompt_arg):
-    prompt = None
-    if prompt_arg is None:
-        return prompt
-
-    # Check if it's a path to a markdown file (PromptDown format)
-    if prompt_arg.endswith(".md") and os.path.exists(prompt_arg):
-        try:
-            from promptdown import StructuredPrompt
-
-            structured_prompt = StructuredPrompt.from_promptdown_file(prompt_arg)
-
-            # Initialize our prompt structure
-            prompt = {}
-
-            # Handle developer_message or system_message
-            # Developer message takes precedence if both are present
-            if (
-                hasattr(structured_prompt, "developer_message")
-                and structured_prompt.developer_message
-            ):
-                prompt["system"] = structured_prompt.developer_message
-            elif (
-                hasattr(structured_prompt, "system_message")
-                and structured_prompt.system_message
-            ):
-                prompt["system"] = structured_prompt.system_message
-
-            # Extract user message from conversation
-            if (
-                hasattr(structured_prompt, "conversation")
-                and structured_prompt.conversation
-            ):
-                for message in structured_prompt.conversation:
-                    if message.role.lower() == "user":
-                        prompt["user"] = message.content
-                        break
-
-            # Ensure we found a user message
-            if "user" not in prompt or not prompt["user"]:
-                raise ValueError(
-                    "PromptDown file must contain at least one user message"
-                )
-
-            print(f"Successfully loaded PromptDown file: {prompt_arg}")
-
-            # Validate required placeholders
-            if any(c not in prompt["user"] for c in ["{text}"]):
-                raise ValueError(
-                    "User message in PromptDown must contain `{text}` placeholder"
-                )
-
-            return prompt
-        except Exception as e:
-            raise ValueError(f"Failed to parse PromptDown file {prompt_arg}: {e}") from e
-
-    # Existing parsing logic for JSON strings and other formats
-    if not any(prompt_arg.endswith(ext) for ext in [".json", ".txt", ".md"]):
-        try:
-            # user can define prompt by passing a json string
-            # eg: --prompt '{"system": "You are a professional translator who translates computer technology books", "user": "Translate \`{text}\` to {language}"}'
-            prompt = json.loads(prompt_arg)
-        except json.JSONDecodeError:
-            # if not a json string, treat it as a template string
-            prompt = {"user": prompt_arg}
-
-    elif os.path.exists(prompt_arg):
-        if prompt_arg.endswith(".txt"):
-            # if it's a txt file, treat it as a template string
-            with open(prompt_arg, encoding="utf-8") as f:
-                prompt = {"user": f.read()}
-        elif prompt_arg.endswith(".json"):
-            # if it's a json file, treat it as a json object
-            # eg: --prompt prompt_template_sample.json
-            with open(prompt_arg, encoding="utf-8") as f:
-                prompt = json.load(f)
-    else:
-        raise FileNotFoundError(f"{prompt_arg} not found")
-
-    if prompt is None:
-        raise ValueError("prompt is empty")
-    if "user" not in prompt:
-        raise ValueError("prompt must contain the key of `user`")
-    if any(c not in prompt["user"] for c in ["{text}"]):
-        raise ValueError("prompt must contain `{text}`")
-
-    if (prompt.keys() - {"user", "system"}) != set():
-        raise ValueError("prompt can only contain the keys of `user` and `system`")
-
-    print("prompt config:", prompt)
-    return prompt
-
 
 def main():
     translate_model_list = list(MODEL_DICT.keys())
@@ -410,12 +315,9 @@ So you are close to reaching the limit. You have to choose your own value, there
     options = parser.parse_args()
 
     if not options.book_name:
-        print("Error: please provide the path of your book using --book_name <path>")
-        exit(1)
+        raise ValueError("please provide the path of your book using --book_name <path>")
     if not os.path.isfile(options.book_name):
-        print(f"Error: the book {options.book_name!r} does not exist.")
-        exit(1)
-
+        raise FileNotFoundError(f"the book {options.book_name!r} does not exist")
     PROXY = options.proxy
     if PROXY != "":
         os.environ["http_proxy"] = PROXY
@@ -423,63 +325,7 @@ So you are close to reaching the limit. You have to choose your own value, there
 
     translate_model = MODEL_DICT.get(options.model)
     assert translate_model is not None, "unsupported model"
-    API_KEY = ""
-    if options.model in [
-        "openai",
-        "chatgptapi",
-        "gpt4",
-        "gpt4omini",
-        "gpt4o",
-        "gpt5mini",
-        "o1preview",
-        "o1",
-        "o1mini",
-        "o3mini",
-    ]:
-        if OPENAI_API_KEY := (
-            options.openai_key
-            or env.get(
-                "OPENAI_API_KEY",
-            )  # XXX: for backward compatibility, deprecate soon
-            or env.get(
-                "BBM_OPENAI_API_KEY",
-            )  # suggest adding `BBM_` prefix for all the bilingual_book_maker ENVs.
-        ):
-            API_KEY = OPENAI_API_KEY
-            # patch
-        elif options.ollama_model:
-            # any string is ok, can't be empty
-            API_KEY = "ollama"
-        else:
-            raise Exception(
-                "OpenAI API key not provided, please google how to obtain it",
-            )
-    elif options.model == "caiyun":
-        API_KEY = options.caiyun_key or env.get("BBM_CAIYUN_API_KEY")
-        if not API_KEY:
-            raise Exception("Please provide caiyun key")
-    elif options.model == "deepl":
-        API_KEY = options.deepl_key or env.get("BBM_DEEPL_API_KEY")
-        if not API_KEY:
-            raise Exception("Please provide deepl key")
-    elif options.model.startswith("claude"):
-        API_KEY = options.claude_key or env.get("BBM_CLAUDE_API_KEY")
-        if not API_KEY:
-            raise Exception("Please provide claude key")
-    elif options.model == "customapi":
-        API_KEY = options.custom_api or env.get("BBM_CUSTOM_API")
-        if not API_KEY:
-            raise Exception("Please provide custom translate api")
-    elif options.model in ["gemini", "geminipro"]:
-        API_KEY = options.gemini_key or env.get("BBM_GOOGLE_GEMINI_KEY")
-    elif options.model == "groq":
-        API_KEY = options.groq_key or env.get("BBM_GROQ_API_KEY")
-    elif options.model == "xai":
-        API_KEY = options.xai_key or env.get("BBM_XAI_API_KEY")
-    elif options.model.startswith("qwen-"):
-        API_KEY = options.qwen_key or env.get("BBM_QWEN_API_KEY")
-    else:
-        API_KEY = ""
+    API_KEY = resolve_api_key(options)
 
     if options.book_from == "kobo":
         from book_maker import obok
@@ -534,92 +380,7 @@ So you are close to reaching the limit. You have to choose your own value, there
         source_lang=options.source_lang,
         parallel_workers=options.parallel_workers,
     )
-    # other options
-    if options.allow_navigable_strings:
-        e.allow_navigable_strings = True
-    if options.translate_tags:
-        e.translate_tags = options.translate_tags
-    if options.exclude_translate_tags:
-        e.exclude_translate_tags = options.exclude_translate_tags
-    if options.exclude_filelist:
-        e.exclude_filelist = options.exclude_filelist
-    if options.only_filelist:
-        e.only_filelist = options.only_filelist
-    if options.accumulated_num > 1:
-        e.accumulated_num = options.accumulated_num
-    if options.translation_style:
-        e.translation_style = options.translation_style
-    if options.batch_size:
-        e.batch_size = options.batch_size
-    if options.retranslate:
-        e.retranslate = options.retranslate
-    if options.deployment_id:
-        # only work for ChatGPT api for now
-        # later maybe support others
-        assert options.model in [
-            "chatgptapi",
-            "gpt4",
-            "gpt4omini",
-            "gpt4o",
-            "gpt5mini",
-            "o1",
-            "o1preview",
-            "o1mini",
-            "o3mini",
-        ], "only support chatgptapi for deployment_id"
-        if not options.api_base:
-            raise ValueError("`api_base` must be provided when using `deployment_id`")
-        e.translate_model.set_deployment_id(options.deployment_id)
-    if options.model in ("openai", "groq"):
-        # Currently only supports `openai` when you also have --model_list set
-        if options.model_list:
-            e.translate_model.set_model_list(options.model_list.split(","))
-        else:
-            raise ValueError(
-                "When using `openai` model, you must also provide `--model_list`. For default model sets use `--model chatgptapi` or `--model gpt4` or `--model gpt4omini` or `--model gpt5mini`",
-            )
-    # TODO refactor, quick fix for gpt4 model
-    if options.model == "chatgptapi":
-        if options.ollama_model:
-            e.translate_model.set_gpt35_models(ollama_model=options.ollama_model)
-        else:
-            e.translate_model.set_gpt35_models()
-    if options.model == "gpt4":
-        e.translate_model.set_gpt4_models()
-    if options.model == "gpt4omini":
-        e.translate_model.set_gpt4omini_models()
-    if options.model == "gpt4o":
-        e.translate_model.set_gpt4o_models()
-    if options.model == "gpt5mini":
-        e.translate_model.set_gpt5mini_models()
-    if options.model == "o1preview":
-        e.translate_model.set_o1preview_models()
-    if options.model == "o1":
-        e.translate_model.set_o1_models()
-    if options.model == "o1mini":
-        e.translate_model.set_o1mini_models()
-    if options.model == "o3mini":
-        e.translate_model.set_o3mini_models()
-    if options.model.startswith("claude-"):
-        e.translate_model.set_claude_model(options.model)
-    if options.model.startswith("qwen-"):
-        e.translate_model.set_qwen_model(options.model)
-    if options.block_size > 0:
-        e.block_size = options.block_size
-    if options.batch_flag:
-        e.batch_flag = options.batch_flag
-    if options.batch_use_flag:
-        e.batch_use_flag = options.batch_use_flag
-
-    if options.model in ("gemini", "geminipro"):
-        e.translate_model.set_interval(options.interval)
-    if options.model == "gemini":
-        if options.model_list:
-            e.translate_model.set_model_list(options.model_list.split(","))
-        else:
-            e.translate_model.set_geminiflash_models()
-    if options.model == "geminipro":
-        e.translate_model.set_geminipro_models()
+    configure_loader_from_options(e, options)
 
     e.make_bilingual_book()
 

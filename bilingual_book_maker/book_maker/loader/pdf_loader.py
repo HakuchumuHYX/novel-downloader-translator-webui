@@ -1,9 +1,8 @@
 import sys
 from pathlib import Path
 
-from book_maker.utils import prompt_config_to_kwargs
-
 from .base_loader import BaseBookLoader
+from .common import create_translator, load_resume_entries, save_resume_entries, save_text_output
 
 import fitz
 
@@ -33,13 +32,14 @@ class PDFBookLoader(BaseBookLoader):
             raise Exception("PyMuPDF (fitz) is required to use PDF loader")
 
         self.pdf_name = pdf_name
-        self.translate_model = model(
+        self.translate_model = create_translator(
+            model,
             key,
             language,
-            api_base=model_api_base,
+            model_api_base=model_api_base,
+            prompt_config=prompt_config,
             temperature=temperature,
             source_lang=source_lang,
-            **prompt_config_to_kwargs(prompt_config),
         )
         self.is_test = is_test
         self.p_to_save = []
@@ -235,22 +235,10 @@ class PDFBookLoader(BaseBookLoader):
         )
 
     def _save_progress(self):
-        try:
-            with open(self.bin_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(self.p_to_save))
-        except Exception as e:
-            raise Exception("can not save resume file") from e
+        save_resume_entries(self.bin_path, self.p_to_save, mode="lines")
 
     def load_state(self):
-        try:
-            with open(self.bin_path, encoding="utf-8") as f:
-                self.p_to_save = f.read().splitlines()
-        except Exception as e:
-            raise Exception("can not load resume file") from e
+        self.p_to_save = load_resume_entries(self.bin_path, mode="lines")
 
     def save_file(self, book_path, content):
-        try:
-            with open(book_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(content))
-        except Exception as e:
-            raise Exception("can not save file") from e
+        save_text_output(book_path, content)

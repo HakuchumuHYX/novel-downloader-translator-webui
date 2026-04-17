@@ -1,9 +1,7 @@
-import sys
 from pathlib import Path
 
-from book_maker.utils import prompt_config_to_kwargs
-
 from .base_loader import BaseBookLoader
+from .common import create_translator, load_resume_entries, save_resume_entries, save_text_output
 
 
 class MarkdownBookLoader(BaseBookLoader):
@@ -23,15 +21,17 @@ class MarkdownBookLoader(BaseBookLoader):
         context_paragraph_limit=0,
         temperature=1.0,
         source_lang="auto",
+        parallel_workers=1,
     ) -> None:
         self.md_name = md_name
-        self.translate_model = model(
+        self.translate_model = create_translator(
+            model,
             key,
             language,
-            api_base=model_api_base,
+            model_api_base=model_api_base,
+            prompt_config=prompt_config,
             temperature=temperature,
             source_lang=source_lang,
-            **prompt_config_to_kwargs(prompt_config),
         )
         self.is_test = is_test
         self.p_to_save = []
@@ -40,6 +40,7 @@ class MarkdownBookLoader(BaseBookLoader):
         self.test_num = test_num
         self.batch_size = 10
         self.single_translate = single_translate
+        self.parallel_workers = max(1, parallel_workers)
         self.md_paragraphs = []
 
         try:
@@ -140,7 +141,7 @@ class MarkdownBookLoader(BaseBookLoader):
             print("程序将保存进度，您可以稍后继续")
             self._save_progress()
             self._save_temp_book()
-            sys.exit(1)  # 使用非零退出码表示错误
+            raise
 
     def _save_temp_book(self):
         sliced_list = [
@@ -163,22 +164,10 @@ class MarkdownBookLoader(BaseBookLoader):
         )
 
     def _save_progress(self):
-        try:
-            with open(self.bin_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(self.p_to_save))
-        except Exception as e:
-            raise Exception("can not save resume file") from e
+        save_resume_entries(self.bin_path, self.p_to_save, mode="lines")
 
     def load_state(self):
-        try:
-            with open(self.bin_path, encoding="utf-8") as f:
-                self.p_to_save = f.read().splitlines()
-        except Exception as e:
-            raise Exception("can not load resume file") from e
+        self.p_to_save = load_resume_entries(self.bin_path, mode="lines")
 
     def save_file(self, book_path, content):
-        try:
-            with open(book_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(content))
-        except Exception as e:
-            raise Exception("can not save file") from e
+        save_text_output(book_path, content)

@@ -1,25 +1,10 @@
-import builtins
-import json
 import os
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
-
-from book_maker.utils import prompt_config_to_kwargs
 
 from .base_loader import BaseBookLoader
-
-
-def emit_progress(stage: str, current: int, total: int, unit: str) -> None:
-    payload = {
-        "stage": str(stage),
-        "current": int(current),
-        "total": int(total),
-        "unit": str(unit),
-    }
-    builtins.print("__WEBUI_PROGRESS__ " + json.dumps(payload, ensure_ascii=False), flush=True)
+from .common import create_translator, emit_progress, load_resume_entries, save_resume_entries, save_text_output
 
 
 class TXTBookLoader(BaseBookLoader):
@@ -42,13 +27,14 @@ class TXTBookLoader(BaseBookLoader):
         parallel_workers=1,
     ) -> None:
         self.txt_name = txt_name
-        self.translate_model = model(
+        self.translate_model = create_translator(
+            model,
             key=key,
             language=language,
-            api_base=model_api_base,
+            model_api_base=model_api_base,
+            prompt_config=prompt_config,
             temperature=temperature,
             source_lang=source_lang,
-            **prompt_config_to_kwargs(prompt_config),
         )
 
         self.is_test = is_test
@@ -216,52 +202,10 @@ class TXTBookLoader(BaseBookLoader):
         )
 
     def _save_progress(self):
-        try:
-            payload: dict[str, Any] = {
-                "version": 2,
-                "p_to_save": self.p_to_save,
-            }
-            final_path = Path(self.bin_path)
-            temp_path = final_path.with_suffix(final_path.suffix + ".tmp")
-
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-
-            temp_path.replace(final_path)
-        except Exception as e:
-            raise Exception("can not save resume file") from e
+        save_resume_entries(self.bin_path, self.p_to_save, mode="json", atomic=True)
 
     def load_state(self):
-        try:
-            raw = Path(self.bin_path).read_text(encoding="utf-8")
-            data = json.loads(raw)
-
-            if isinstance(data, dict) and isinstance(data.get("p_to_save"), list):
-                self.p_to_save = [str(x) for x in data.get("p_to_save", [])]
-                return
-
-            # Backward compatibility: very old format may be a plain JSON array.
-            if isinstance(data, list):
-                self.p_to_save = [str(x) for x in data]
-                return
-
-            # Unexpected JSON payload format.
-            raise ValueError("invalid resume json format")
-        except json.JSONDecodeError:
-            # Backward compatibility with legacy newline-joined format.
-            try:
-                with open(self.bin_path, encoding="utf-8") as f:
-                    self.p_to_save = f.read().splitlines()
-            except Exception as e:
-                raise Exception("can not load resume file") from e
-        except Exception as e:
-            raise Exception("can not load resume file") from e
+        self.p_to_save = load_resume_entries(self.bin_path, mode="json")
 
     def save_file(self, book_path, content):
-        try:
-            with open(book_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(content))
-        except Exception as e:
-            raise Exception("can not save file") from e
+        save_text_output(book_path, content)

@@ -66,12 +66,6 @@ def get_task(conn: sqlite3.Connection, task_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
 
 
-def get_next_queued_task(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM tasks WHERE status = 'queued' ORDER BY id ASC LIMIT 1"
-    ).fetchone()
-
-
 def claim_next_queued_task(conn: sqlite3.Connection) -> sqlite3.Row | None:
     while True:
         row = conn.execute("SELECT id FROM tasks WHERE status = 'queued' ORDER BY id ASC LIMIT 1").fetchone()
@@ -94,22 +88,6 @@ def claim_next_queued_task(conn: sqlite3.Connection) -> sqlite3.Row | None:
         )
         if cur.rowcount > 0:
             return get_task(conn, task_id)
-
-
-def set_task_running(conn: sqlite3.Connection, task_id: int) -> None:
-    conn.execute(
-        """
-        UPDATE tasks
-        SET status = 'running',
-            started_at = ?,
-            error_message = '',
-            error_code = '',
-            stop_requested = 0,
-            pause_requested = 0
-        WHERE id = ?
-        """,
-        (utcnow_iso(), task_id),
-    )
 
 
 def reconcile_orphan_running_tasks(conn: sqlite3.Connection) -> list[int]:

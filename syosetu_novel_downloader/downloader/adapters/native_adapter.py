@@ -11,6 +11,7 @@ from syosetu import Syosetu
 from ..models import BookMeta, Chapter, DownloadOptions, DownloadResult
 from ..utils import detect_site_from_url, emit_progress
 from .base import BackendAdapter
+from .native_common import parse_native_volume_txt
 
 
 class NativeFallbackAdapter(BackendAdapter):
@@ -60,11 +61,11 @@ class NativeFallbackAdapter(BackendAdapter):
                     )
                 )
 
-            chapters = []
+            chapters: list[Chapter] = []
             chapter_index = 1
             for txt in _iter_volume_txt_files_in_order(book_dir):
                 volume_name = txt.stem
-                sections = _parse_native_volume_txt(txt)
+                sections = parse_native_volume_txt(txt)
                 for title, content in sections:
                     chapters.append(
                         Chapter(
@@ -166,26 +167,3 @@ def _iter_volume_txt_files_in_order(book_dir: Path) -> list[Path]:
         return (0, idx, path.name)
 
     return sorted(txt_files, key=_sort_key)
-
-
-def _parse_native_volume_txt(path: Path) -> list[tuple[str, str]]:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    lines = text.splitlines()
-
-    parsed: list[tuple[str, str]] = []
-    current_title = ""
-    buffer: list[str] = []
-
-    for line in lines:
-        if line.startswith("● "):
-            if current_title:
-                parsed.append((current_title, "\n".join(buffer).strip()))
-            current_title = line[2:].strip()
-            buffer = []
-        else:
-            buffer.append(line)
-
-    if current_title:
-        parsed.append((current_title, "\n".join(buffer).strip()))
-
-    return parsed

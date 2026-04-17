@@ -6,9 +6,8 @@ import re
 import sys
 from pathlib import Path
 
-from book_maker.utils import prompt_config_to_kwargs
-
 from .base_loader import BaseBookLoader
+from .common import create_translator, load_resume_entries, save_resume_entries, save_text_output
 
 
 class SRTBookLoader(BaseBookLoader):
@@ -28,20 +27,20 @@ class SRTBookLoader(BaseBookLoader):
         context_paragraph_limit=0,
         temperature=1.0,
         source_lang="auto",
+        parallel_workers=1,
     ) -> None:
         self.srt_name = srt_name
-        self.translate_model = model(
+        self.translate_model = create_translator(
+            model,
             key,
             language,
-            api_base=model_api_base,
+            model_api_base=model_api_base,
             temperature=temperature,
             source_lang=source_lang,
-            **prompt_config_to_kwargs(
-                {
-                    "system": "You are a srt subtitle file translator.",
-                    "user": "Translate the following subtitle text into {language}, but keep the subtitle number and timeline and newlines unchanged: \n{text}",
-                }
-            ),
+            prompt_config={
+                "system": "You are a srt subtitle file translator.",
+                "user": "Translate the following subtitle text into {language}, but keep the subtitle number and timeline and newlines unchanged: \n{text}",
+            },
         )
         self.is_test = is_test
         self.p_to_save = []
@@ -51,6 +50,7 @@ class SRTBookLoader(BaseBookLoader):
         self.accumulated_num = 1
         self.blocks = []
         self.single_translate = single_translate
+        self.parallel_workers = max(1, parallel_workers)
 
         self.resume = resume
         self.bin_path = f"{Path(srt_name).parent}/.{Path(srt_name).stem}.temp.bin"
@@ -61,7 +61,7 @@ class SRTBookLoader(BaseBookLoader):
         pass
 
     def _parse_srt(self, srt_text):
-        blocks = re.split("\n\s*\n", srt_text)
+        blocks = re.split(r"\n\s*\n", srt_text)
 
         final_blocks = []
         new_block = {}
@@ -279,27 +279,10 @@ class SRTBookLoader(BaseBookLoader):
         )
 
     def _save_progress(self):
-        try:
-            with open(self.bin_path, "w", encoding="utf-8") as f:
-                f.write("===".join(self.p_to_save))
-        except Exception as e:
-            raise Exception("can not save resume file") from e
+        save_resume_entries(self.bin_path, self.p_to_save, mode="joined", delimiter="===")
 
     def load_state(self):
-        try:
-            with open(self.bin_path, encoding="utf-8") as f:
-                text = f.read()
-                if text:
-                    self.p_to_save = text.split("===")
-                else:
-                    self.p_to_save = []
-
-        except Exception as e:
-            raise Exception("can not load resume file") from e
+        self.p_to_save = load_resume_entries(self.bin_path, mode="joined", delimiter="===")
 
     def save_file(self, book_path, content):
-        try:
-            with open(book_path, "w", encoding="utf-8") as f:
-                f.write("\n\n".join(content))
-        except Exception as e:
-            raise Exception("can not save file") from e
+        save_text_output(book_path, content, joiner="\n\n")

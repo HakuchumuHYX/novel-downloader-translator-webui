@@ -1,21 +1,14 @@
 import os
 import re
-import shutil
-from asyncio import Semaphore, as_completed, create_task
+from asyncio import Semaphore
 from collections.abc import Callable
 from urllib.parse import urlparse
 
-import aiofiles
 import aiohttp
 from bs4 import BeautifulSoup  # type: ignore
 
 from custom_typing import ChapterContent, ChapterTitle, NovelTitle
-
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-}
+from downloader.legacy_async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
 
 
 class Kakuyomu:
@@ -36,6 +29,7 @@ class Kakuyomu:
 
         self.__semaphore = Semaphore(8)
         self.__episode_urls: list[str] = []
+        self.__session: aiohttp.ClientSession | None = None
 
     def __normalize_work_url(self, url: str) -> str:
         base = url.strip().split("?", 1)[0].rstrip("/")
@@ -49,7 +43,7 @@ class Kakuyomu:
         return matched.group(1)
 
     async def async_init(self) -> None:
-        headers = dict(HEADERS)
+        headers = dict(DEFAULT_HEADERS)
         if self.cookie:
             headers["Cookie"] = self.cookie
 
@@ -156,9 +150,7 @@ class Kakuyomu:
         return title, content
 
     async def __async_save_txt(self, title: ChapterTitle, content: ChapterContent, chapter_index: int, file_path: str) -> None:
-        async with aiofiles.open(f"{file_path}.txt", "a+", encoding="utf-8") as f:
-            await f.write(f"● {title} [第{chapter_index}話]\n")
-            await f.write(f"{content}\n")
+        await write_chapter_text(file_path, str(title), str(content), chapter_suffix=f"[第{chapter_index}話]")
 
     async def async_fetch(self, chapter_index: int, episode_url: str, file_path: str) -> tuple[int, str, ChapterTitle, ChapterContent]:
         async with self.__semaphore:
@@ -166,26 +158,16 @@ class Kakuyomu:
             return chapter_index, file_path, title, content
 
     async def async_download(self, output_dir: str) -> None:
-        output_dir = os.path.join(output_dir, self.novel_title)
-        if os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = prepare_output_dir(output_dir, self.novel_title)
 
         self.total_chapters = len(self.__episode_urls)
-        downloaded = 0
-        if self.progress_callback:
-            self.progress_callback(downloaded, self.total_chapters)
-
-        tasks = [
-            create_task(self.async_fetch(idx, episode_url, os.path.join(output_dir, self.novel_title)))
-            for idx, episode_url in enumerate(self.__episode_urls, start=1)
-        ]
-        results: list[tuple[int, str, ChapterTitle, ChapterContent]] = []
-        for task in as_completed(tasks):
-            results.append(await task)
-            downloaded += 1
-            if self.progress_callback:
-                self.progress_callback(downloaded, self.total_chapters)
-
+        results = await collect_results(
+            [
+                self.async_fetch(idx, episode_url, os.path.join(output_dir, self.novel_title))
+                for idx, episode_url in enumerate(self.__episode_urls, start=1)
+            ],
+            total=self.total_chapters,
+            progress_callback=self.progress_callback,
+        )
         for chapter_index, file_path, title, content in sorted(results, key=lambda item: item[0]):
             await self.__async_save_txt(title, content, chapter_index, file_path)

@@ -1,5 +1,3 @@
-import tiktoken
-
 # Borrowed from : https://github.com/openai/whisper
 LANGUAGES = {
     "en": "english",
@@ -133,6 +131,8 @@ def prompt_config_to_kwargs(prompt_config):
 
 # ref: https://platform.openai.com/docs/guides/chat/introduction
 def num_tokens_from_text(text, model="gpt-3.5-turbo-0301"):
+    import tiktoken
+
     messages = (
         {
             "role": "user",

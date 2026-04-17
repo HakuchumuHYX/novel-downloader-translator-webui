@@ -4,7 +4,6 @@ import json
 import os
 import queue
 import shutil
-import signal
 import subprocess
 import threading
 import time
@@ -14,8 +13,24 @@ from typing import Any
 
 from ..config import get_config
 from ..db import get_conn
+from ..option_registry import parse_bool
 from ..security import decrypt_text, sanitize_log
-from .settings_service import load_settings, merged_settings
+from ..task_models import TaskPayload
+from .command_builder import build_downloader_command, build_translator_command
+from .settings_service import load_settings, load_task_payload, merged_settings
+from .worker_command_service import classify_worker_error, redact_command, terminate_process
+from .worker_file_service import (
+    artifact_kind,
+    collect_artifacts,
+    file_has_content,
+    has_translate_resume_state,
+    list_source_candidates,
+    log_download_manifest_summary,
+    resolve_source_file,
+    resolve_translated_file,
+    safe_int,
+    translate_resume_state_path,
+)
 from .task_service import (
     add_artifact,
     append_log,
@@ -145,7 +160,7 @@ class TaskWorker(threading.Thread):
             try:
                 self._process_task(task_id)
             except Exception as exc:  # noqa: BLE001
-                status, error_code = self._classify_error(exc)
+                status, error_code = classify_worker_error(exc)
                 self._log(task_id, f"Worker error: {exc}", level="error")
                 with get_conn() as conn:
                     task = get_task(conn, task_id)
@@ -168,46 +183,10 @@ class TaskWorker(threading.Thread):
                             error_code=error_code,
                         )
 
-    def _classify_error(self, exc: Exception) -> tuple[str, str]:
-        msg = str(exc)
-        low = msg.lower()
-        if "__task_paused__" in low:
-            return "paused", "PAUSED"
-        if "__task_stopped__" in low:
-            return "canceled", "STOPPED"
-        if "__task_timeout__" in low:
-            return "failed", "PROCESS_TIMEOUT"
-
-        # Stage-aware classification first (avoid false matches from file paths like /downloads/... in translate stage).
-        if "download_stage:" in low:
-            return "failed", "DOWNLOAD_FAILED"
-        if "translate_stage:" in low:
-            return "failed", "TRANSLATE_FAILED"
-
-        if "auth" in low or "forbidden" in low or "unauthorized" in low or "cookie" in low:
-            return "failed", "AUTH_FAILED"
-        if "translate" in low or "translated output" in low:
-            return "failed", "TRANSLATE_FAILED"
-        if "download" in low or "node backend" in low or "native downloader" in low:
-            return "failed", "DOWNLOAD_FAILED"
-        return "failed", "UNKNOWN"
-
     def _log(self, task_id: int, message: str, level: str = "info") -> None:
         clean = sanitize_log(message)
         with get_conn() as conn:
             append_log(conn, task_id, clean, level=level)
-
-    def _safe_int(self, value: Any) -> int:
-        try:
-            return int(value)
-        except Exception:
-            return 0
-
-    def _file_has_content(self, path: Path) -> bool:
-        try:
-            return path.exists() and path.is_file() and path.stat().st_size > 0
-        except OSError:
-            return False
 
     def _try_reuse_download_source(
         self,
@@ -220,7 +199,7 @@ class TaskWorker(threading.Thread):
         source_full_book_path = (source_full_book_path or "").strip()
         if source_full_book_path:
             candidate = Path(source_full_book_path)
-            if self._file_has_content(candidate):
+            if file_has_content(candidate):
                 self._log(task_id, f"Resuming with existing source_full_book_path: {candidate}")
                 return candidate
 
@@ -239,7 +218,7 @@ class TaskWorker(threading.Thread):
         # worker to redownload with merge enabled instead of translating one
         # arbitrary candidate.
         if translating_task and not merge_all_enabled:
-            candidates = self._list_source_candidates(download_root, save_format=save_format)
+            candidates = list_source_candidates(download_root, save_format=save_format)
             if len(candidates) > 1:
                 self._log(
                     task_id,
@@ -249,7 +228,7 @@ class TaskWorker(threading.Thread):
                 return None
 
         try:
-            candidate = self._resolve_source_file(
+            candidate = resolve_source_file(
                 download_root,
                 merged_name=merged_name,
                 save_format=save_format,
@@ -257,20 +236,11 @@ class TaskWorker(threading.Thread):
         except Exception:
             return None
 
-        if self._file_has_content(candidate):
+        if file_has_content(candidate):
             self._log(task_id, f"Resuming with existing downloaded source: {candidate}")
             return candidate
 
         return None
-
-    def _translate_resume_state_path(self, source_path: Path) -> Path:
-        # bilingual_book_maker txt loader expects:
-        #   <book_dir>/.<book_stem>.temp.bin
-        return source_path.parent / f".{source_path.stem}.temp.bin"
-
-    def _has_translate_resume_state(self, source_path: Path) -> bool:
-        state_path = self._translate_resume_state_path(source_path)
-        return self._file_has_content(state_path)
 
     def _process_task(self, task_id: int) -> None:
         cfg = get_config()
@@ -278,7 +248,7 @@ class TaskWorker(threading.Thread):
             task = get_task(conn, task_id)
             if not task:
                 return
-            payload = json.loads(task["payload_json"])
+            payload = load_task_payload(task)
             base_settings = load_settings(conn)
 
         effective_settings = merged_settings(base_settings, payload.get("settings_overrides", {}))
@@ -292,7 +262,7 @@ class TaskWorker(threading.Thread):
 
         source_path = Path(payload.get("upload_path", ""))
         task_stage = str(task["stage"] or "").strip().lower()
-        translate_current = self._safe_int(task["translate_current"])
+        translate_current = safe_int(task["translate_current"])
         resume_translate = task_stage == "translate" or translate_current > 0
 
         if payload.get("source_type") != "upload":
@@ -326,7 +296,7 @@ class TaskWorker(threading.Thread):
 
         translated_path = Path("")
         if payload.get("mode", "download_and_translate") == "download_and_translate":
-            if resume_translate and not self._has_translate_resume_state(source_path):
+            if resume_translate and not has_translate_resume_state(source_path):
                 self._log(
                     task_id,
                     "Translate resume state file is missing; continuing without --resume.",
@@ -355,10 +325,10 @@ class TaskWorker(threading.Thread):
                 add_artifact(conn, task_id, "translated", translated_path)
 
             existing = {Path(r["file_path"]) for r in list_artifacts(conn, task_id)}
-            for extra in self._collect_artifacts(task_root):
+            for extra in collect_artifacts(task_root):
                 if extra in existing:
                     continue
-                kind = self._artifact_kind(extra)
+                kind = artifact_kind(extra)
                 add_artifact(conn, task_id, kind, extra)
                 existing.add(extra)
 
@@ -383,79 +353,35 @@ class TaskWorker(threading.Thread):
         download_root: Path,
     ) -> Path:
         cfg = get_config()
-        site_map = {
-            "syosetu": "syosetu",
-            "syosetu-r18": "novel18",
-            "kakuyomu": "kakuyomu",
-        }
-        site = site_map[payload["source_type"]]
-        save_format = payload.get("save_format") or settings.get("save_format", "txt")
-
-        command = [
-            cfg.downloader_python,
-            str(cfg.downloader_entry),
-            "--site",
-            site,
-            "--backend",
-            payload.get("backend") or settings.get("backend", "auto"),
-            "--paid-policy",
-            payload.get("paid_policy") or settings.get("paid_policy", "skip"),
-            "--save-format",
-            save_format,
-            "--output-dir",
-            str(download_root),
-            "--merged-name",
-            payload.get("merged_name") or settings.get("merged_name", ""),
-            "--timeout",
-            payload.get("timeout") or settings.get("timeout", "240"),
-            "--retries",
-            payload.get("retries") or settings.get("retries", "2"),
-            "--rate-limit",
-            payload.get("rate_limit") or settings.get("rate_limit", "1.0"),
-        ]
-
-        merge_all_enabled = str(payload.get("merge_all", settings.get("merge_all", "true"))).lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        translating_task = payload.get("mode", "download_and_translate") == "download_and_translate"
-        effective_merge_all = merge_all_enabled or translating_task
-        if effective_merge_all:
-            command.append("--merge-all")
-            if translating_task and not merge_all_enabled:
-                self._log(
-                    task_id,
-                    "Translation task requires a single merged source; enabling merge_all for this download run.",
-                    level="warning",
-                )
-
-        if str(payload.get("record_chapter_number", settings.get("record_chapter_number", "false"))).lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
-            command.append("--record-chapter-number")
-
-        source_input = str(payload.get("source_input", "")).strip()
-        if source_input.startswith("http://") or source_input.startswith("https://"):
-            command.extend(["--url", source_input])
-        else:
-            command.extend(["--novel_id", source_input])
+        payload_model = TaskPayload.model_validate(payload)
+        save_format = payload_model.save_format or settings.get("save_format", "txt")
 
         cookie_profile_id = payload.get("cookie_profile_id")
+        cookie_header = ""
         if cookie_profile_id:
             with get_conn() as conn:
                 profile = get_cookie_profile(conn, int(cookie_profile_id))
             if profile:
-                cookie_value = decrypt_text(profile["cookie_enc"]).strip()
-                if cookie_value:
+                cookie_header = decrypt_text(profile["cookie_enc"]).strip()
+                if cookie_header:
                     # Pass as header-style cookie string for downloader compatibility.
-                    command.extend(["--cookie", cookie_value])
+                    pass
                 else:
                     self._log(task_id, f"Cookie profile {cookie_profile_id} is empty", level="warning")
+
+        command, forced_merge_for_translate = build_downloader_command(
+            cfg,
+            payload_model,
+            settings,
+            download_root,
+            cookie_header=cookie_header,
+        )
+        if forced_merge_for_translate:
+            self._log(
+                task_id,
+                "Translation task requires a single merged source; enabling merge_all for this download run.",
+                level="warning",
+            )
 
         timeout_seconds = int(
             payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds
@@ -464,7 +390,7 @@ class TaskWorker(threading.Thread):
         self._log(task_id, "Running downloader command")
         self._run_command(task_id, command, cwd=str(cfg.downloader_entry.parent), timeout_seconds=timeout_seconds)
 
-        source_path = self._resolve_source_file(
+        source_path = resolve_source_file(
             download_root,
             merged_name=payload.get("merged_name") or settings.get("merged_name", ""),
             save_format=save_format,
@@ -481,7 +407,7 @@ class TaskWorker(threading.Thread):
         if source_size <= 0:
             raise RuntimeError(f"Downloader finished but source output file is empty: {source_path}")
 
-        self._log_download_manifest_summary(task_id, download_root)
+        log_download_manifest_summary(task_id, download_root, log=self._log)
         self._log(task_id, f"Download source resolved: {source_path}")
         return source_path
 
@@ -495,102 +421,29 @@ class TaskWorker(threading.Thread):
         force_resume: bool = False,
     ) -> Path:
         cfg = get_config()
-        command = [
-            cfg.translator_python,
-            str(cfg.translator_entry),
-            "--book_name",
-            str(source_path),
-            "--model",
-            settings.get("model", "openai"),
-            "--language",
-            settings.get("language", "zh-hans"),
-        ]
-
-        optional_pairs = {
-            "model_list": "--model_list",
-            "api_base": "--api_base",
-            "source_lang": "--source_lang",
-            "temperature": "--temperature",
-            "accumulated_num": "--accumulated_num",
-            "parallel_workers": "--parallel-workers",
-            "context_paragraph_limit": "--context_paragraph_limit",
-            "block_size": "--block_size",
-            "proxy": "--proxy",
-            "translation_style": "--translation_style",
-            "batch_size": "--batch_size",
-            "interval": "--interval",
-            "deployment_id": "--deployment_id",
-            "translate_tags": "--translate-tags",
-            "exclude_translate_tags": "--exclude_translate-tags",
-        }
-
-        for key, arg in optional_pairs.items():
-            value = settings.get(key, "")
-            if value != "":
-                command.extend([arg, value])
-
-        prompt_file = settings.get("prompt_file", "")
-        prompt_text = settings.get("prompt_text", "")
-        prompt_system = settings.get("prompt_system", "")
-        prompt_user = settings.get("prompt_user", "")
-        if prompt_file:
-            command.extend(["--prompt", prompt_file])
-        elif prompt_text:
-            command.extend(["--prompt", prompt_text])
-        elif prompt_user:
-            prompt_payload = {"user": prompt_user}
-            if prompt_system:
-                prompt_payload["system"] = prompt_system
-            command.extend(["--prompt", json.dumps(prompt_payload, ensure_ascii=False)])
-
-        if settings.get("use_context", "false").lower() in {"1", "true", "yes", "on"}:
-            command.append("--use_context")
-
-        resume_requested = force_resume or settings.get("resume", "false").lower() in {"1", "true", "yes", "on"}
-        if resume_requested:
-            resume_state_path = self._translate_resume_state_path(source_path)
-            if self._file_has_content(resume_state_path):
-                command.append("--resume")
-            else:
-                self._log(
-                    task_id,
-                    f"Resume requested but state file not found: {resume_state_path}; running without --resume.",
-                    level="warning",
-                )
-
-        if settings.get("allow_navigable_strings", "false").lower() in {"1", "true", "yes", "on"}:
-            command.append("--allow_navigable_strings")
-
-        key_map = {
-            "openai_key": "--openai_key",
-            "claude_key": "--claude_key",
-            "gemini_key": "--gemini_key",
-            "groq_key": "--groq_key",
-            "xai_key": "--xai_key",
-            "qwen_key": "--qwen_key",
-            "caiyun_key": "--caiyun_key",
-            "deepl_key": "--deepl_key",
-            "custom_api": "--custom_api",
-        }
-        for key, arg in key_map.items():
-            value = settings.get(key, "")
-            if value:
-                command.extend([arg, value])
-
-        translate_mode = payload.get("translate_mode", "preview")
-        if translate_mode == "preview":
-            command.append("--test")
-            command.extend(["--test_num", str(payload.get("test_num") or settings.get("test_num", "80"))])
-
-        translation_output_mode = str(payload.get("translation_output_mode", "translated_only")).strip()
-        if translation_output_mode == "translated_only":
-            command.append("--single_translate")
+        payload_model = TaskPayload.model_validate(payload)
+        resume_requested = force_resume or parse_bool(settings.get("resume", "false"), default=False)
+        has_resume_state = file_has_content(translate_resume_state_path(source_path))
+        if resume_requested and not has_resume_state:
+            self._log(
+                task_id,
+                f"Resume requested but state file not found: {translate_resume_state_path(source_path)}; running without --resume.",
+                level="warning",
+            )
+        command = build_translator_command(
+            cfg,
+            source_path,
+            payload_model,
+            settings,
+            force_resume=force_resume,
+            has_resume_state=has_resume_state,
+        )
 
         timeout_seconds = int(payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds)
         self._log(task_id, "Running translator command")
         self._run_command(task_id, command, cwd=str(cfg.translator_entry.parent), timeout_seconds=timeout_seconds)
 
-        translated = self._resolve_translated_file(source_path)
+        translated = resolve_translated_file(source_path)
         if translated and translated.exists():
             try:
                 translated_size = translated.stat().st_size
@@ -622,49 +475,7 @@ class TaskWorker(threading.Thread):
             set_task_pid(conn, task_id, None)
 
     def _terminate_process(self, process: subprocess.Popen[str], reason: str = "") -> None:
-        cfg = get_config()
-        if process.poll() is not None:
-            return
-
-        reason_norm = (reason or "").strip().lower()
-
-        def _send(sig: int) -> bool:
-            try:
-                # start_new_session=True makes child pid also the process group id.
-                os.killpg(process.pid, sig)
-                return True
-            except Exception:
-                try:
-                    process.send_signal(sig)
-                    return True
-                except Exception:
-                    return False
-
-        def _wait(timeout_seconds: float) -> bool:
-            if timeout_seconds <= 0:
-                return False
-            try:
-                process.wait(timeout=timeout_seconds)
-                return True
-            except subprocess.TimeoutExpired:
-                return False
-            except Exception:
-                return False
-
-        # Pause prefers SIGINT to trigger KeyboardInterrupt and persist resume state.
-        if reason_norm == "paused":
-            if _send(signal.SIGINT):
-                if _wait(max(float(cfg.stop_grace_seconds), 8.0)):
-                    return
-
-        if _send(signal.SIGTERM):
-            if _wait(max(float(cfg.stop_grace_seconds), 2.0)):
-                return
-
-        if not _send(signal.SIGKILL):
-            return
-
-        _wait(5.0)
+        terminate_process(process, stop_grace_seconds=float(get_config().stop_grace_seconds), reason=reason)
 
     def _apply_progress_event_to_db(self, task_id: int, evt: dict[str, Any]) -> None:
         stage = str(evt.get("stage") or "").strip()
@@ -857,231 +668,12 @@ class TaskWorker(threading.Thread):
             if timed_out:
                 raise RuntimeError(f"__TASK_TIMEOUT__ command exceeded {timeout_seconds}s")
             if rc != 0:
-                raise RuntimeError(f"Command failed with exit code {rc}: {self._redact_command(command)}")
+                raise RuntimeError(f"Command failed with exit code {rc}: {redact_command(command)}")
         finally:
             try:
                 self._flush_latest_progress(task_id)
             finally:
                 self._unregister_process(task_id)
-
-    def _redact_command(self, command: list[str]) -> str:
-        sensitive_flags = {
-            "--openai_key",
-            "--claude_key",
-            "--gemini_key",
-            "--groq_key",
-            "--xai_key",
-            "--qwen_key",
-            "--caiyun_key",
-            "--deepl_key",
-            "--custom_api",
-            "--cookie",
-            "--cookie-file",
-        }
-
-        redacted: list[str] = []
-        hide_next = False
-        for token in command:
-            if hide_next:
-                redacted.append("***")
-                hide_next = False
-                continue
-
-            redacted.append(token)
-            if token in sensitive_flags:
-                hide_next = True
-
-        return " ".join(redacted)
-
-    def _log_download_manifest_summary(self, task_id: int, download_root: Path) -> None:
-        manifests = sorted(
-            [p for p in download_root.rglob("manifest.json") if p.is_file()],
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if not manifests:
-            return
-
-        manifest_path = manifests[0]
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8", errors="ignore"))
-        except Exception:
-            self._log(task_id, f"Download manifest exists but could not be parsed: {manifest_path}", level="warning")
-            return
-
-        backend = str(payload.get("backend_used", "")).strip() or "unknown"
-        status = str(payload.get("status", "")).strip() or "unknown"
-        chapter_count = self._safe_int(payload.get("chapter_count"))
-        expected_count = self._safe_int(payload.get("expected_chapter_count"))
-        skipped = self._safe_int(payload.get("skipped_chapters"))
-
-        summary = (
-            "Download manifest summary: "
-            f"backend={backend}, status={status}, chapter_count={chapter_count}, "
-            f"expected={expected_count}, skipped={skipped}"
-        )
-        self._log(task_id, summary)
-
-        reasons = payload.get("skipped_reasons")
-        if isinstance(reasons, list):
-            for reason in reasons:
-                txt = str(reason).strip()
-                if txt:
-                    self._log(task_id, f"Download skipped reason: {txt}", level="warning")
-
-    def _resolve_source_file(self, download_root: Path, merged_name: str, save_format: str) -> Path:
-        candidates = self._list_source_candidates(download_root, save_format=save_format)
-
-        def _is_source_candidate(path: Path) -> bool:
-            name = path.name.lower()
-            excluded_markers = ("_翻译", "_bilingual", "_temp", "source_metadata", "readme")
-            return not any(marker in name for marker in excluded_markers)
-
-        suffix = ".txt" if save_format == "txt" else ".epub"
-        merged_name = (merged_name or "").strip()
-        if merged_name:
-            merged_candidate = f"{merged_name}{suffix}".lower()
-            found = sorted(
-                [
-                    path for path in candidates if path.suffix.lower() == suffix and path.name.lower() == merged_candidate
-                ]
-            )
-            if found:
-                return found[0]
-
-        preferred = [path for path in candidates if path.suffix.lower() == suffix]
-        if preferred:
-            return preferred[0]
-        if candidates:
-            return candidates[0]
-
-        raise RuntimeError(f"No source output file found under {download_root}")
-
-    def _list_source_candidates(self, download_root: Path, save_format: str) -> list[Path]:
-        def _is_source_candidate(path: Path) -> bool:
-            name = path.name.lower()
-            excluded_markers = ("_翻译", "_bilingual", "_temp", "source_metadata", "readme")
-            return not any(marker in name for marker in excluded_markers)
-
-        candidates = sorted(
-            [
-                path
-                for path in [*download_root.rglob("*.txt"), *download_root.rglob("*.epub")]
-                if _is_source_candidate(path)
-            ],
-            key=lambda p: (p.suffix.lower() != f".{save_format}", -p.stat().st_size, str(p)),
-        )
-        return candidates
-
-    def _resolve_translated_file(self, source_path: Path) -> Path | None:
-        stem = source_path.stem
-        parent = source_path.parent
-        suffix = source_path.suffix.lower()
-
-        preferred = "_翻译"
-        legacy = "_bilingual"
-
-        if suffix == ".txt":
-            for marker in (preferred, legacy):
-                candidate = parent / f"{stem}{marker}.txt"
-                if candidate.exists():
-                    return candidate
-
-        if suffix == ".epub":
-            for marker in (preferred, legacy):
-                candidate = parent / f"{stem}{marker}.epub"
-                if candidate.exists():
-                    return candidate
-
-        matches = sorted(
-            [
-                *parent.glob(f"{stem}{preferred}*"),
-                *parent.glob(f"{stem}{legacy}*"),
-            ],
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        return matches[0] if matches else None
-
-    def _collect_artifacts(self, task_root: Path) -> list[Path]:
-        """
-        Collect extra artifacts under task_root.
-
-        Notes:
-        - source/translated main outputs are already added explicitly; here we mainly pick up
-          manifest/logs and other useful files.
-        - avoid exposing hidden/temp/cache files, and cap the total count to keep the UI responsive.
-        """
-        max_extra = max(1, int(os.getenv("WEBUI_MAX_EXTRA_ARTIFACTS", "200")))
-        allowed_ext = {".log", ".json", ".txt", ".epub", ".md", ".pdf", ".srt"}
-        ignore_dirs = {"__pycache__", ".pytest_cache", ".cache", "cache", "tmp", "temp"}
-
-        preferred_roots: list[Path] = []
-        downloads_dir = task_root / "downloads"
-        if downloads_dir.exists():
-            preferred_roots.append(downloads_dir)
-        preferred_roots.append(task_root)
-
-        seen_paths: set[Path] = set()
-        scored: list[tuple[float, int, Path]] = []
-        for root in preferred_roots:
-            iterator = root.rglob("*") if root != task_root else root.glob("*")
-            for p in iterator:
-                if p in seen_paths:
-                    continue
-                seen_paths.add(p)
-                if not p.is_file():
-                    continue
-
-                # never expose temp cookie files as downloadable artifacts
-                if p.name.startswith(".cookie_"):
-                    continue
-
-                try:
-                    rel = p.relative_to(task_root)
-                except ValueError:
-                    continue
-
-                # exclude hidden paths and common cache/temp folders
-                if any(part in ignore_dirs for part in rel.parts):
-                    continue
-                if any(part.startswith(".") for part in rel.parts):
-                    continue
-
-                # allowlist by file type/name
-                if p.name != "manifest.json" and p.suffix.lower() not in allowed_ext:
-                    continue
-
-                try:
-                    st = p.stat()
-                except OSError:
-                    continue
-
-                scored.append((float(st.st_mtime), int(st.st_size), p))
-
-        scored.sort(reverse=True)
-        if len(scored) > max_extra:
-            scored = scored[:max_extra]
-
-        files = [p for _, __, p in scored]
-        return sorted(files)
-
-    def _artifact_kind(self, file_path: Path) -> str:
-        name = file_path.name.lower()
-        translated_exts = {".txt", ".epub", ".md", ".pdf", ".srt"}
-        if (
-            any(name.endswith(f"_bilingual{ext}") for ext in translated_exts)
-            or any(name.endswith(f"_翻译{ext}") for ext in translated_exts)
-            or any(name.endswith(f"_翻译_temp{ext}") for ext in translated_exts)
-        ):
-            return "translated"
-        if name.endswith("manifest.json"):
-            return "manifest"
-        if name.endswith(".log"):
-            return "log"
-        if file_path.suffix.lower() in {".txt", ".epub", ".md", ".pdf", ".srt"}:
-            return "source"
-        return "other"
 
     def _maybe_cleanup(self) -> None:
         self._cleanup_tick += 1

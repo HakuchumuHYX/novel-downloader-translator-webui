@@ -7,9 +7,10 @@ from pathlib import Path
 
 from kakuyomu import Kakuyomu
 
-from ..models import BookMeta, Chapter, DownloadOptions, DownloadResult
+from ..models import BookMeta, DownloadOptions, DownloadResult
 from ..utils import detect_site_from_url, emit_progress
 from .base import BackendAdapter
+from .native_common import chapters_from_txt_files
 
 
 class NativeKakuyomuAdapter(BackendAdapter):
@@ -36,22 +37,8 @@ class NativeKakuyomuAdapter(BackendAdapter):
                 )
             )
 
-            chapters = []
-            chapter_index = 1
             txt_files = sorted(book_dir.glob("*.txt"))
-            for txt in txt_files:
-                sections = _parse_native_volume_txt(txt)
-                for title, content in sections:
-                    chapters.append(
-                        Chapter(
-                            index=chapter_index,
-                            title=title,
-                            content=content,
-                            volume=txt.stem,
-                            source_path=str(txt.relative_to(book_dir)),
-                        )
-                    )
-                    chapter_index += 1
+            chapters = chapters_from_txt_files(book_dir, txt_files, strip_index_suffix=True)
 
             if not chapters:
                 raise RuntimeError("Native kakuyomu downloader produced no chapter content")
@@ -100,28 +87,3 @@ async def _run_native_kakuyomu_download(
         raise RuntimeError("Native kakuyomu downloader produced no output directory")
 
     return dirs[0]
-
-
-def _parse_native_volume_txt(path: Path) -> list[tuple[str, str]]:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    lines = text.splitlines()
-
-    parsed: list[tuple[str, str]] = []
-    current_title = ""
-    buffer: list[str] = []
-
-    for line in lines:
-        if line.startswith("● "):
-            if current_title:
-                parsed.append((current_title, "\n".join(buffer).strip()))
-            current_title = line[2:].strip()
-            if current_title.endswith("]") and " [" in current_title:
-                current_title = current_title.rsplit(" [", 1)[0]
-            buffer = []
-        else:
-            buffer.append(line)
-
-    if current_title:
-        parsed.append((current_title, "\n".join(buffer).strip()))
-
-    return parsed

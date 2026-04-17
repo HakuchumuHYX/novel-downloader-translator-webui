@@ -1,26 +1,20 @@
 import os
 import re
-import shutil
-from asyncio import Semaphore, as_completed, create_task, gather
+from asyncio import Semaphore, gather
 from collections.abc import Callable
 from enum import Enum
 from urllib.parse import parse_qs, urlparse
 
-import aiofiles
 import aiohttp
 from bs4 import BeautifulSoup, Tag  # type: ignore
 from deprecated import deprecated
 from pydantic import BaseModel
 
 from custom_typing import ChapterContent, ChapterRange, ChapterTitle, NovelTitle, PartTitle
+from downloader.legacy_async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
 
 
 MAIN_URL: str = "https://ncode.syosetu.com"
-
-headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
-}
 
 
 class Syosetu:
@@ -44,6 +38,7 @@ class Syosetu:
 
         self.__semaphore = Semaphore(8)
         self.__novel_info_soups: list[BeautifulSoup] = []
+        self.__session: aiohttp.ClientSession | None = None
 
     async def async_init(self):
         cookies = {"over18": "yes"} if self.over18 else None
@@ -72,7 +67,7 @@ class Syosetu:
 
         async with self.__session.get(
             f"{self.base_url}{suffix}",
-            headers=headers,
+            headers=DEFAULT_HEADERS,
             proxy=self.proxy,
         ) as response:
             return BeautifulSoup(await response.text(), "html.parser")
@@ -102,7 +97,7 @@ class Syosetu:
     async def __fetch_chapters_info(self, chapter: int) -> BeautifulSoup:
         async with self.__session.get(
             f"{self.base_url}/{self.novel_id}/{chapter}",
-            headers=headers,
+            headers=DEFAULT_HEADERS,
             proxy=self.proxy,
         ) as response:
             return BeautifulSoup(await response.text(), "html.parser")
@@ -223,13 +218,8 @@ class Syosetu:
         return title, content
 
     async def __async_save_txt(self, title: ChapterTitle | PartTitle, content: ChapterContent, chapter_index, file_path: str) -> None:
-        async with aiofiles.open(f"{file_path}.txt", "a+", encoding="utf-8") as f:
-            if self.record_chapter_index:
-                await f.write(f"● {title} [総第{chapter_index}話]\n")
-            else:
-                await f.write(f"● {title}\n")
-
-            await f.write(f"{content}\n")
+        chapter_suffix = f"[総第{chapter_index}話]" if self.record_chapter_index else ""
+        await write_chapter_text(file_path, str(title), str(content), chapter_suffix=chapter_suffix)
 
     async def async_fetch(self, chapter_index: int, file_path: str) -> tuple[int, str, ChapterTitle, ChapterContent]:
         async with self.__semaphore:
@@ -237,11 +227,7 @@ class Syosetu:
             return chapter_index, file_path, title, content
 
     async def async_download(self, output_dir) -> None:
-        output_dir = os.path.join(output_dir, self.novel_title)
-        print(output_dir)
-        if os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = prepare_output_dir(output_dir, self.novel_title)
         parts: dict[PartTitle, ChapterRange] = await self.__get_novel_parts()
         print((len(parts) == 0) and "No part\n" or f"All parts:\n{chr(10).join(list(parts.keys()))}\n")
 
@@ -257,13 +243,16 @@ class Syosetu:
 
         async def _run_jobs(jobs):
             nonlocal downloaded
-            tasks = [create_task(self.async_fetch(chapter_index, file_path)) for chapter_index, file_path in jobs]
-            results: list[tuple[int, str, ChapterTitle, ChapterContent]] = []
-            for task in as_completed(tasks):
-                results.append(await task)
-                downloaded += 1
+            def _on_progress(current: int, _: int) -> None:
                 if self.progress_callback:
-                    self.progress_callback(downloaded, self.total_chapters)
+                    self.progress_callback(downloaded + current, self.total_chapters)
+
+            results = await collect_results(
+                [self.async_fetch(chapter_index, file_path) for chapter_index, file_path in jobs],
+                total=len(jobs),
+                progress_callback=_on_progress,
+            )
+            downloaded += len(results)
             for chapter_index, file_path, title, content in sorted(results, key=lambda item: item[0]):
                 await self.__async_save_txt(title, content, chapter_index, file_path)
 
