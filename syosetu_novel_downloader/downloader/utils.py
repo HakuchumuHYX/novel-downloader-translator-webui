@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import sys
-from pathlib import Path
 from urllib.parse import urlparse
 
 from .models import SiteId
@@ -20,20 +19,15 @@ def detect_site_from_url(url: str) -> SiteId:
     raise ValueError(f"Unsupported site hostname: {host or '<empty>'}")
 
 
-def normalize_input_url(url: str, novel_id: str, site: SiteId) -> str:
-    if url:
-        return url.strip()
+def normalize_input_url(url: str, site: SiteId) -> str:
+    normalized = str(url or "").strip()
+    if not normalized:
+        raise ValueError("--url is required")
 
-    nid = novel_id.strip().strip("/")
-    if not nid:
-        raise ValueError("Either --url or --novel_id is required")
-
-    if site == "novel18":
-        return f"https://novel18.syosetu.com/{nid}/"
-    if site in ("auto", "syosetu"):
-        return f"https://ncode.syosetu.com/{nid}/"
-
-    raise ValueError("--novel_id is only supported for syosetu/novel18")
+    detected_site = detect_site_from_url(normalized)
+    if site != "auto" and site != detected_site:
+        raise ValueError(f"--site={site} does not match URL host for {detected_site}")
+    return normalized
 
 
 def sanitize_filename(name: str, default: str = "book") -> str:

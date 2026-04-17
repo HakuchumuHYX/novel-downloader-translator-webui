@@ -146,18 +146,6 @@ def init_db() -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_task_artifacts_task_path ON task_artifacts(task_id, file_path)"
         )
-
-        # Backward-compat migration:
-        # old versions used merged_name=full_book as default; new behavior treats empty as "auto title".
-        conn.execute(
-            """
-            UPDATE settings
-            SET value = ?, updated_at = ?
-            WHERE key = 'merged_name' AND value = 'full_book'
-            """,
-            ("", utcnow_iso()),
-        )
-
         conn.commit()
     except sqlite3.OperationalError as exc:
         if "readonly" in str(exc).lower():

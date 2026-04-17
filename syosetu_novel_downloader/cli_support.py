@@ -28,12 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="multi-site novel downloader (syosetu/novel18/kakuyomu)"
     )
 
-    parser.add_argument("--url", default="", help="Full novel URL")
-    parser.add_argument(
-        "--novel_id",
-        default="",
-        help="Legacy syosetu novel id, e.g. n4350im (kept for compatibility)",
-    )
+    parser.add_argument("--url", required=True, help="Full novel URL")
     parser.add_argument(
         "--site",
         default="auto",
@@ -78,8 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if not args.url and not args.novel_id:
-        parser.error("Either --url or --novel_id must be provided")
+    if not str(args.url or "").strip():
+        parser.error("--url is required")
 
 
 def build_download_options(args: argparse.Namespace) -> DownloadOptions:
@@ -87,7 +82,7 @@ def build_download_options(args: argparse.Namespace) -> DownloadOptions:
     from downloader.utils import normalize_input_url
 
     return DownloadOptions(
-        url=normalize_input_url(args.url, args.novel_id, args.site),
+        url=normalize_input_url(args.url, args.site),
         site=args.site,
         backend=args.backend,
         proxy=args.proxy,

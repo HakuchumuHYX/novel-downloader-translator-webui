@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import hmac
 import re
 from typing import Optional
@@ -14,11 +12,6 @@ from .config import get_config
 
 
 security = HTTPBasic(auto_error=True)
-
-
-def _fallback_key_material() -> str:
-    digest = hashlib.sha256(b"webui-insecure-fallback-key").digest()
-    return base64.urlsafe_b64encode(digest).decode("ascii")
 
 
 def _is_valid_fernet_key(key: str) -> bool:
@@ -34,10 +27,9 @@ def get_fernet() -> Fernet:
     key = cfg.secret_key.strip() if cfg.secret_key else ""
     if key and _is_valid_fernet_key(key):
         return Fernet(key.encode("utf-8"))
-    if key and cfg.require_secret_key:
+    if key:
         raise RuntimeError("Invalid WEBUI_SECRET_KEY format (must be a valid Fernet key)")
-    fallback = _fallback_key_material()
-    return Fernet(fallback.encode("utf-8"))
+    raise RuntimeError("Valid WEBUI_SECRET_KEY is required for encryption/decryption")
 
 
 def encryption_configured() -> bool:
@@ -49,30 +41,9 @@ def encrypt_text(plain_text: str) -> str:
     return get_fernet().encrypt(plain_text.encode("utf-8")).decode("utf-8")
 
 
-def _get_fallback_fernet() -> Fernet:
-    fallback = _fallback_key_material()
-    return Fernet(fallback.encode("ascii"))
-
-
 def decrypt_text(cipher_text: str) -> str:
-    """
-    Decrypt text with best-effort backward compatibility.
-
-    If WEBUI_SECRET_KEY is configured, we decrypt with that key first.
-    If it fails (e.g. data was encrypted earlier using the fallback key),
-    we try the fallback key as a second chance to avoid "locking" users out
-    of previously saved secrets after configuring WEBUI_SECRET_KEY.
-    """
     token = cipher_text.encode("utf-8")
-    fernet = get_fernet()
-    try:
-        return fernet.decrypt(token).decode("utf-8")
-    except Exception:
-        # If a valid secret key is configured, data may have been created
-        # before the key existed (fallback). Try fallback for migration.
-        if encryption_configured():
-            return _get_fallback_fernet().decrypt(token).decode("utf-8")
-        raise
+    return get_fernet().decrypt(token).decode("utf-8")
 
 
 def verify_basic_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:

@@ -23,8 +23,8 @@
         <option value="syosetu-r18">Syosetu R18</option>
       </select>
     </label>
-    <label id="source_input_wrap">作品 URL 或 novel_id
-      <input type="text" name="source_input" id="source_input" placeholder="https://... 或 n1234ab">
+    <label id="source_input_wrap">作品 URL
+      <input type="text" name="source_input" id="source_input" placeholder="https://...">
     </label>
     <label id="upload_wrap">上传文件
       <input type="file" name="upload_file" id="upload_file" accept=".txt,.epub,.md,.pdf,.srt">
@@ -63,8 +63,7 @@
       </select>
     </label>
     <label>合并文件名
-      <input type="text" name="merged_name"
-        value="{{ '' if settings.merged_name == 'full_book' else settings.merged_name }}">
+      <input type="text" name="merged_name" value="{{ settings.merged_name }}">
     </label>
     <p class="hint">留空将自动使用作品标题作为合并文件名。</p>
     <label>下载超时（秒）
@@ -113,7 +112,7 @@
     <summary><strong>任务级覆盖参数（可选 / 高级）</strong></summary>
     <div class="two-col">
       <label>model <input type="text" name="override__model" placeholder="{{ settings.model }}"></label>
-      <label>model_list <input type="text" name="override__model_list" placeholder="{{ settings.model_list }}"></label>
+      <label>model_list <input type="text" name="override__model_list" placeholder="{{ settings.model_list or 'openai 留空时默认 gpt-5.2' }}"></label>
       <label>api_base <input type="text" name="override__api_base" placeholder="{{ settings.api_base }}"></label>
       <label>language <input type="text" name="override__language" placeholder="{{ settings.language }}"></label>
       <label>source_lang <input type="text" name="override__source_lang"
@@ -217,7 +216,7 @@
       sourceHint.textContent = 'R18 来源必须选择 Cookie 配置。';
     } else {
       cookieProfile.required = false;
-      sourceHint.textContent = '可输入完整 URL，或（syosetu 系列）novel_id。';
+      sourceHint.textContent = '请输入作品完整 URL。';
     }
   }
 

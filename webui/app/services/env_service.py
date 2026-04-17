@@ -5,12 +5,6 @@ from typing import Iterable
 
 from ..option_registry import ENV_TO_SETTING, SETTING_TO_ENV
 
-# Import-only aliases for compatibility with older or custom .env files.
-_IMPORT_ALIASES = {
-    "OPENAI_API_KEY": "openai_key",
-    "OPENAI_API_SYS_MSG": "prompt_system",
-}
-
 
 def parse_env_text(raw_text: str) -> dict[str, str]:
     result: dict[str, str] = {}
@@ -38,10 +32,6 @@ def import_env_to_settings(raw_text: str) -> dict[str, str]:
 
     for env_key, setting_key in ENV_TO_SETTING.items():
         if env_key in env_data:
-            settings[setting_key] = env_data[env_key]
-
-    for env_key, setting_key in _IMPORT_ALIASES.items():
-        if env_key in env_data and setting_key not in settings:
             settings[setting_key] = env_data[env_key]
 
     return settings

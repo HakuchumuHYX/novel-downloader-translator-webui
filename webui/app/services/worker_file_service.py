@@ -54,7 +54,7 @@ def resolve_source_file(download_root: Path, merged_name: str, save_format: str)
 def list_source_candidates(download_root: Path, save_format: str) -> list[Path]:
     def is_source_candidate(path: Path) -> bool:
         name = path.name.lower()
-        excluded_markers = ("_翻译", "_bilingual", "_temp", "source_metadata", "readme")
+        excluded_markers = ("_翻译", "_temp", "source_metadata", "readme")
         return not any(marker in name for marker in excluded_markers)
 
     return sorted(
@@ -72,25 +72,19 @@ def resolve_translated_file(source_path: Path) -> Path | None:
     parent = source_path.parent
     suffix = source_path.suffix.lower()
 
-    preferred = "_翻译"
-    legacy = "_bilingual"
-
     if suffix == ".txt":
-        for marker in (preferred, legacy):
-            candidate = parent / f"{stem}{marker}.txt"
-            if candidate.exists():
-                return candidate
+        candidate = parent / f"{stem}_翻译.txt"
+        if candidate.exists():
+            return candidate
 
     if suffix == ".epub":
-        for marker in (preferred, legacy):
-            candidate = parent / f"{stem}{marker}.epub"
-            if candidate.exists():
-                return candidate
+        candidate = parent / f"{stem}_翻译.epub"
+        if candidate.exists():
+            return candidate
 
     matches = sorted(
         [
-            *parent.glob(f"{stem}{preferred}*"),
-            *parent.glob(f"{stem}{legacy}*"),
+            *parent.glob(f"{stem}_翻译*"),
         ],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
@@ -151,8 +145,7 @@ def artifact_kind(file_path: Path) -> str:
     name = file_path.name.lower()
     translated_exts = {".txt", ".epub", ".md", ".pdf", ".srt"}
     if (
-        any(name.endswith(f"_bilingual{ext}") for ext in translated_exts)
-        or any(name.endswith(f"_翻译{ext}") for ext in translated_exts)
+        any(name.endswith(f"_翻译{ext}") for ext in translated_exts)
         or any(name.endswith(f"_翻译_temp{ext}") for ext in translated_exts)
     ):
         return "translated"

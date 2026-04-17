@@ -14,11 +14,11 @@ from rich import print
 from .base_translator import Base
 from ..config import config
 
-CHATGPT_CONFIG = config["translator"]["chatgptapi"]
+OPENAI_CONFIG = config["translator"]["openai"]
 
 PROMPT_ENV_MAP = {
-    "user": "BBM_CHATGPTAPI_USER_MSG_TEMPLATE",
-    "system": "BBM_CHATGPTAPI_SYS_MSG",
+    "user": "BBM_PROMPT_USER",
+    "system": "BBM_PROMPT_SYSTEM",
 }
 
 GPT35_MODEL_LIST = [
@@ -29,43 +29,6 @@ GPT35_MODEL_LIST = [
     "gpt-3.5-turbo-16k-0613",
     "gpt-3.5-turbo-0301",
     "gpt-3.5-turbo-0125",
-]
-GPT4_MODEL_LIST = [
-    "gpt-4-1106-preview",
-    "gpt-4",
-    "gpt-4-32k",
-    "gpt-4o-2024-05-13",
-    "gpt-4-0613",
-    "gpt-4-32k-0613",
-]
-
-GPT4oMINI_MODEL_LIST = [
-    "gpt-4o-mini",
-    "gpt-4o-mini-2024-07-18",
-]
-GPT4o_MODEL_LIST = [
-    "gpt-4o",
-    "gpt-4o-2024-05-13",
-    "gpt-4o-2024-08-06",
-    "chatgpt-4o-latest",
-]
-GPT5MINI_MODEL_LIST = [
-    "gpt-5-mini",
-]
-O1PREVIEW_MODEL_LIST = [
-    "o1-preview",
-    "o1-preview-2024-09-12",
-]
-O1_MODEL_LIST = [
-    "o1",
-    "o1-2024-12-17",
-]
-O1MINI_MODEL_LIST = [
-    "o1-mini",
-    "o1-mini-2024-09-12",
-]
-O3MINI_MODEL_LIST = [
-    "o3-mini",
 ]
 
 
@@ -96,13 +59,10 @@ class ChatGPTAPI(Base):
         )
         self.prompt_sys_msg = (
             prompt_sys_msg
-            or environ.get(
-                "OPENAI_API_SYS_MSG",
-            )  # XXX: for backward compatibility, deprecate soon
             or environ.get(PROMPT_ENV_MAP["system"])
             or ""
         )
-        self.system_content = environ.get("OPENAI_API_SYS_MSG") or ""
+        self.system_content = ""
         self.deployment_id = None
         self.temperature = temperature
         self.model_list = None
@@ -114,7 +74,7 @@ class ChatGPTAPI(Base):
             self.context_paragraph_limit = context_paragraph_limit
         else:
             # set by user, use user's value
-            self.context_paragraph_limit = CHATGPT_CONFIG["context_paragraph_limit"]
+            self.context_paragraph_limit = OPENAI_CONFIG["context_paragraph_limit"]
         self.batch_text_list = []
         self.batch_info_cache = None
         self.result_content_cache = {}
@@ -455,102 +415,6 @@ class ChatGPTAPI(Base):
                 i["id"] for i in self.openai_client.models.list().model_dump()["data"]
             ]
             model_list = list(set(my_model_list) & set(GPT35_MODEL_LIST))
-            print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
-
-    def set_gpt4_models(self):
-        # for issue #375 azure can not use model list
-        if self.deployment_id:
-            self.model_list = cycle(["gpt-4"])
-        else:
-            my_model_list = [
-                i["id"] for i in self.openai_client.models.list().model_dump()["data"]
-            ]
-            model_list = list(set(my_model_list) & set(GPT4_MODEL_LIST))
-            print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
-
-    def set_gpt4omini_models(self):
-        # for issue #375 azure can not use model list
-        if self.deployment_id:
-            self.model_list = cycle(["gpt-4o-mini"])
-        else:
-            my_model_list = [
-                i["id"] for i in self.openai_client.models.list().model_dump()["data"]
-            ]
-            model_list = list(set(my_model_list) & set(GPT4oMINI_MODEL_LIST))
-            print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
-
-    def set_gpt4o_models(self):
-        # for issue #375 azure can not use model list
-        if self.deployment_id:
-            self.model_list = cycle(["gpt-4o"])
-        else:
-            my_model_list = [
-                i["id"] for i in self.openai_client.models.list().model_dump()["data"]
-            ]
-            model_list = list(set(my_model_list) & set(GPT4o_MODEL_LIST))
-            print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
-
-    def set_gpt5mini_models(self):
-        # for issue #375 azure can not use model list
-        if self.deployment_id:
-            self.model_list = cycle(["gpt-5-mini"])
-        else:
-            my_model_list = [
-                i["id"] for i in self.openai_client.models.list().model_dump()["data"]
-            ]
-            model_list = list(set(my_model_list) & set(GPT5MINI_MODEL_LIST))
-            print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
-
-    def set_o1preview_models(self):
-        # for issue #375 azure can not use model list
-        if self.deployment_id:
-            self.model_list = cycle(["o1-preview"])
-        else:
-            my_model_list = [
-                i["id"] for i in self.openai_client.models.list().model_dump()["data"]
-            ]
-            model_list = list(set(my_model_list) & set(O1PREVIEW_MODEL_LIST))
-            print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
-
-    def set_o1_models(self):
-        # for issue #375 azure can not use model list
-        if self.deployment_id:
-            self.model_list = cycle(["o1"])
-        else:
-            my_model_list = [
-                i["id"] for i in self.openai_client.models.list().model_dump()["data"]
-            ]
-            model_list = list(set(my_model_list) & set(O1_MODEL_LIST))
-            print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
-
-    def set_o1mini_models(self):
-        # for issue #375 azure can not use model list
-        if self.deployment_id:
-            self.model_list = cycle(["o1-mini"])
-        else:
-            my_model_list = [
-                i["id"] for i in self.openai_client.models.list().model_dump()["data"]
-            ]
-            model_list = list(set(my_model_list) & set(O1MINI_MODEL_LIST))
-            print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
-
-    def set_o3mini_models(self):
-        # for issue #375 azure can not use model list
-        if self.deployment_id:
-            self.model_list = cycle(["o3-mini"])
-        else:
-            my_model_list = [
-                i["id"] for i in self.openai_client.models.list().model_dump()["data"]
-            ]
-            model_list = list(set(my_model_list) & set(O3MINI_MODEL_LIST))
             print(f"Using model list {model_list}")
             self.model_list = cycle(model_list)
 

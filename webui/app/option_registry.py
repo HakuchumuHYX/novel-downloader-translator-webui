@@ -19,15 +19,15 @@ class SettingDefinition:
 
 SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
     SettingDefinition("model", "openai", env_key="BBM_MODEL"),
-    SettingDefinition("model_list", "gpt-5.2", env_key="BBM_MODEL_LIST", translator_flag="--model_list"),
+    SettingDefinition("model_list", "", env_key="BBM_MODEL_LIST", translator_flag="--model_list"),
     SettingDefinition("api_base", "", env_key="BBM_API_BASE", translator_flag="--api_base"),
     SettingDefinition("language", "zh-hans", env_key="BBM_LANGUAGE"),
     SettingDefinition("source_lang", "auto", env_key="BBM_SOURCE_LANG", translator_flag="--source_lang"),
     SettingDefinition("temperature", "1.0", env_key="BBM_TEMPERATURE", translator_flag="--temperature"),
     SettingDefinition("prompt_file", "", env_key="BBM_PROMPT_FILE"),
     SettingDefinition("prompt_text", "", env_key="BBM_PROMPT_TEXT"),
-    SettingDefinition("prompt_system", "", env_key="BBM_CHATGPTAPI_SYS_MSG"),
-    SettingDefinition("prompt_user", "", env_key="BBM_CHATGPTAPI_USER_MSG_TEMPLATE"),
+    SettingDefinition("prompt_system", "", env_key="BBM_PROMPT_SYSTEM"),
+    SettingDefinition("prompt_user", "", env_key="BBM_PROMPT_USER"),
     SettingDefinition("test", "true", env_key="BBM_TEST"),
     SettingDefinition("test_num", "80", env_key="BBM_TEST_NUM"),
     SettingDefinition("resume", "false", env_key="BBM_RESUME"),

@@ -9,7 +9,8 @@ from cli_support import (
     print_run_summary,
     validate_args,
 )
-from downloader import DownloadJob, DownloadOptions
+from downloader.job import DownloadJob
+from downloader.models import DownloadOptions
 
 
 def parse_args() -> argparse.Namespace:

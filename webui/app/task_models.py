@@ -75,7 +75,11 @@ def validate_task_payload_model(payload: TaskPayload) -> tuple[bool, str]:
     if payload.source_type == "upload" and not payload.upload_path:
         return False, "Upload source requires file"
     if payload.source_type != "upload" and not payload.source_input:
-        return False, "URL or novel id is required"
+        return False, "URL is required"
+    if payload.source_type != "upload" and not (
+        payload.source_input.startswith("http://") or payload.source_input.startswith("https://")
+    ):
+        return False, "source_input must be a full URL"
     if payload.source_type == "syosetu-r18" and not payload.cookie_profile_id:
         return False, "syosetu-r18 requires cookie profile"
     return True, ""

@@ -20,10 +20,13 @@ from app.services.task_payload_service import build_task_payload
 from app.task_models import TaskPayload
 from cli_support import build_download_options
 
+VALID_FERNET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+
 def test_settings_override_priority():
     base = dict(DEFAULT_SETTINGS)
-    final = merged_settings(base, {"model": "gpt4o", "language": "ja"})
-    assert final["model"] == "gpt4o"
+    final = merged_settings(base, {"model": "openai", "language": "ja"})
+    assert final["model"] == "openai"
     assert final["language"] == "ja"
 
 
@@ -83,14 +86,18 @@ def test_log_sanitize():
     assert "hello" not in clean
 
 
-def test_invalid_secret_key_fallback(monkeypatch):
+def test_invalid_secret_key_disables_encryption(monkeypatch):
     monkeypatch.setenv("WEBUI_SECRET_KEY", "test")
     monkeypatch.setenv("WEBUI_REQUIRE_SECRET_KEY", "false")
     get_config.cache_clear()
 
     assert encryption_configured() is False
-    cipher = encrypt_text("hello")
-    assert decrypt_text(cipher) == "hello"
+    try:
+        encrypt_text("hello")
+    except RuntimeError as exc:
+        assert "WEBUI_SECRET_KEY" in str(exc)
+    else:
+        raise AssertionError("encrypt_text should require a valid WEBUI_SECRET_KEY")
 
     get_config.cache_clear()
 
@@ -125,18 +132,18 @@ def test_cookie_json_parse_and_infer_site():
     assert infer_site_from_json_text(raw) == "kakuyomu"
 
 
-def test_import_env_settings_with_aliases():
+def test_import_env_settings_uses_current_keys():
     raw = """
     BBM_MODEL=openai
     BBM_LANGUAGE=zh-hans
-    OPENAI_API_KEY=legacy_openai_key
-    OPENAI_API_SYS_MSG='legacy system'
+    BBM_OPENAI_API_KEY=current_openai_key
+    BBM_PROMPT_SYSTEM='current system'
     """
     mapped = import_env_to_settings(raw)
     assert mapped["model"] == "openai"
     assert mapped["language"] == "zh-hans"
-    assert mapped["openai_key"] == "legacy_openai_key"
-    assert mapped["prompt_system"] == "legacy system"
+    assert mapped["openai_key"] == "current_openai_key"
+    assert mapped["prompt_system"] == "current system"
 
 
 def test_export_env_settings_uses_bbm_keys():
@@ -147,8 +154,8 @@ def test_export_env_settings_uses_bbm_keys():
 
     exported = export_settings_to_env(settings)
     assert "BBM_MODEL=openai" in exported
-    assert "BBM_CHATGPTAPI_SYS_MSG=sys" in exported
-    assert "BBM_CHATGPTAPI_USER_MSG_TEMPLATE=user" in exported
+    assert "BBM_PROMPT_SYSTEM=sys" in exported
+    assert "BBM_PROMPT_USER=user" in exported
 
 
 def test_build_task_payload_normalizes_parallel_workers():
@@ -187,7 +194,7 @@ def test_build_translator_command_uses_prompt_and_resume():
         downloader_python="python",
         downloader_entry=Path("/tmp/downloader.py"),
         translator_python="python",
-        translator_entry=Path("/tmp/make_book.py"),
+        translator_entry=Path("/tmp/bookmaker"),
     )
     payload = TaskPayload(
         translate_mode="preview",
@@ -199,6 +206,7 @@ def test_build_translator_command_uses_prompt_and_resume():
     settings["prompt_user"] = "user {text}"
     settings["use_context"] = "true"
     settings["resume"] = "true"
+    settings["model_list"] = ""
 
     command = build_translator_command(
         cfg,
@@ -213,6 +221,48 @@ def test_build_translator_command_uses_prompt_and_resume():
     assert "--use_context" in command
     assert "--test" in command
     assert "--single_translate" in command
+    assert command[:3] == ["python", "-m", "book_maker"]
+    assert "--model_list" in command
+    assert "gpt-5.2" in command
+
+
+def test_build_translator_command_skips_default_openai_model_list_for_other_models():
+    cfg = AppConfig(
+        base_dir=Path("/tmp/webui"),
+        data_dir=Path("/tmp/data"),
+        db_path=Path("/tmp/data/webui.sqlite3"),
+        task_root=Path("/tmp/data/tasks"),
+        upload_root=Path("/tmp/data/uploads"),
+        worker_interval_seconds=1.0,
+        cleanup_days=14,
+        app_env="dev",
+        enforce_secure_defaults=False,
+        basic_auth_user="user",
+        basic_auth_password="pass",
+        secret_key="",
+        require_secret_key=False,
+        process_timeout_seconds=7200,
+        stop_grace_seconds=8,
+        downloader_python="python",
+        downloader_entry=Path("/tmp/downloader.py"),
+        translator_python="python",
+        translator_entry=Path("/tmp/bookmaker"),
+    )
+    payload = TaskPayload(
+        translate_mode="full",
+        translation_output_mode="bilingual",
+    )
+    settings = dict(DEFAULT_SETTINGS)
+    settings["model"] = "groq"
+    settings["model_list"] = ""
+
+    command = build_translator_command(
+        cfg,
+        Path("/tmp/book.txt"),
+        payload,
+        settings,
+    )
+    assert "--model_list" not in command
 
 
 def assert_init_has_parallel_workers(path: Path, class_name: str):
@@ -278,7 +328,7 @@ def test_save_settings_rejects_secret_without_key(monkeypatch):
 
 
 def test_save_settings_can_clear_secret(monkeypatch):
-    monkeypatch.delenv("WEBUI_SECRET_KEY", raising=False)
+    monkeypatch.setenv("WEBUI_SECRET_KEY", VALID_FERNET_KEY)
     monkeypatch.setenv("WEBUI_REQUIRE_SECRET_KEY", "false")
     get_config.cache_clear()
 
@@ -348,7 +398,6 @@ def test_delete_task_records_cascade_removes_descendants():
 def test_build_download_options_uses_cli_namespace():
     args = argparse.Namespace(
         url="https://kakuyomu.jp/works/abc123",
-        novel_id="",
         site="auto",
         backend="native",
         proxy="http://localhost:7890",

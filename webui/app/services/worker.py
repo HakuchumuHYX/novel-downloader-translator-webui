@@ -441,7 +441,7 @@ class TaskWorker(threading.Thread):
 
         timeout_seconds = int(payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds)
         self._log(task_id, "Running translator command")
-        self._run_command(task_id, command, cwd=str(cfg.translator_entry.parent), timeout_seconds=timeout_seconds)
+        self._run_command(task_id, command, cwd=str(cfg.translator_entry), timeout_seconds=timeout_seconds)
 
         translated = resolve_translated_file(source_path)
         if translated and translated.exists():

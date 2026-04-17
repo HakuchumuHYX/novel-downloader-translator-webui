@@ -4,6 +4,8 @@ import json
 import os
 from os import environ as env
 
+OPENAI_DEFAULT_MODEL_LIST = ["gpt-5.2"]
+
 
 def parse_prompt_arg(prompt_arg):
     prompt = None
@@ -69,19 +71,8 @@ def parse_prompt_arg(prompt_arg):
 
 
 def resolve_api_key(options):
-    if options.model in [
-        "openai",
-        "chatgptapi",
-        "gpt4",
-        "gpt4omini",
-        "gpt4o",
-        "gpt5mini",
-        "o1preview",
-        "o1",
-        "o1mini",
-        "o3mini",
-    ]:
-        openai_api_key = options.openai_key or env.get("OPENAI_API_KEY") or env.get("BBM_OPENAI_API_KEY")
+    if options.model == "openai":
+        openai_api_key = options.openai_key or env.get("BBM_OPENAI_API_KEY")
         if openai_api_key:
             return openai_api_key
         if options.ollama_model:
@@ -102,12 +93,12 @@ def resolve_api_key(options):
         if not api_key:
             raise Exception("Please provide claude key")
         return api_key
-    if options.model == "customapi":
+    if options.model == "custom_api":
         api_key = options.custom_api or env.get("BBM_CUSTOM_API")
         if not api_key:
             raise Exception("Please provide custom translate api")
         return api_key
-    if options.model in ["gemini", "geminipro"]:
+    if options.model == "gemini":
         return options.gemini_key or env.get("BBM_GOOGLE_GEMINI_KEY")
     if options.model == "groq":
         return options.groq_key or env.get("BBM_GROQ_API_KEY")
@@ -116,6 +107,10 @@ def resolve_api_key(options):
     if options.model.startswith("qwen-"):
         return options.qwen_key or env.get("BBM_QWEN_API_KEY")
     return ""
+
+
+def _split_model_list(raw_value):
+    return [item.strip() for item in str(raw_value or "").split(",") if item.strip()]
 
 
 def configure_loader_from_options(loader, options):
@@ -138,48 +133,17 @@ def configure_loader_from_options(loader, options):
     if options.retranslate:
         loader.retranslate = options.retranslate
     if options.deployment_id:
-        assert options.model in [
-            "chatgptapi",
-            "gpt4",
-            "gpt4omini",
-            "gpt4o",
-            "gpt5mini",
-            "o1",
-            "o1preview",
-            "o1mini",
-            "o3mini",
-        ], "only support chatgptapi for deployment_id"
+        assert options.model == "openai", "deployment_id only supports model=openai"
         if not options.api_base:
             raise ValueError("`api_base` must be provided when using `deployment_id`")
         loader.translate_model.set_deployment_id(options.deployment_id)
-    if options.model in ("openai", "groq"):
-        if options.model_list:
-            loader.translate_model.set_model_list(options.model_list.split(","))
-        else:
-            raise ValueError(
-                "When using `openai` model, you must also provide `--model_list`. For default model sets use `--model chatgptapi` or `--model gpt4` or `--model gpt4omini` or `--model gpt5mini`",
-            )
-    if options.model == "chatgptapi":
+    if options.model == "openai":
         if options.ollama_model:
             loader.translate_model.set_gpt35_models(ollama_model=options.ollama_model)
         else:
-            loader.translate_model.set_gpt35_models()
-    if options.model == "gpt4":
-        loader.translate_model.set_gpt4_models()
-    if options.model == "gpt4omini":
-        loader.translate_model.set_gpt4omini_models()
-    if options.model == "gpt4o":
-        loader.translate_model.set_gpt4o_models()
-    if options.model == "gpt5mini":
-        loader.translate_model.set_gpt5mini_models()
-    if options.model == "o1preview":
-        loader.translate_model.set_o1preview_models()
-    if options.model == "o1":
-        loader.translate_model.set_o1_models()
-    if options.model == "o1mini":
-        loader.translate_model.set_o1mini_models()
-    if options.model == "o3mini":
-        loader.translate_model.set_o3mini_models()
+            loader.translate_model.set_model_list(_split_model_list(options.model_list) or OPENAI_DEFAULT_MODEL_LIST)
+    if options.model == "groq" and options.model_list:
+        loader.translate_model.set_model_list(_split_model_list(options.model_list))
     if options.model.startswith("claude-"):
         loader.translate_model.set_claude_model(options.model)
     if options.model.startswith("qwen-"):
@@ -190,12 +154,9 @@ def configure_loader_from_options(loader, options):
         loader.batch_flag = options.batch_flag
     if options.batch_use_flag:
         loader.batch_use_flag = options.batch_use_flag
-    if options.model in ("gemini", "geminipro"):
-        loader.translate_model.set_interval(options.interval)
     if options.model == "gemini":
+        loader.translate_model.set_interval(options.interval)
         if options.model_list:
-            loader.translate_model.set_model_list(options.model_list.split(","))
+            loader.translate_model.set_model_list(_split_model_list(options.model_list))
         else:
             loader.translate_model.set_geminiflash_models()
-    if options.model == "geminipro":
-        loader.translate_model.set_geminipro_models()

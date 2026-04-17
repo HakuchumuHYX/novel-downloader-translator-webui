@@ -109,14 +109,9 @@ def validate_task_payload(payload: dict[str, Any]) -> ValidationResult:
 
 
 def validate_translation_settings(settings: dict[str, str]) -> ValidationResult:
-    model = str(settings.get("model", "")).strip()
-    model_list = str(settings.get("model_list", "")).strip()
     deployment_id = str(settings.get("deployment_id", "")).strip()
     api_base = str(settings.get("api_base", "")).strip()
     interval = str(settings.get("interval", "")).strip()
-
-    if model == "openai" and not model_list:
-        return ValidationResult(False, "model=openai requires model_list")
 
     if deployment_id and not api_base:
         return ValidationResult(False, "deployment_id requires api_base")

@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFil
 from fastapi.responses import JSONResponse
 
 from ..db import get_conn
-from ..option_registry import parse_bool
 from ..schemas import CookieJsonParseRequest, CookieProfileUpsertRequest
 from ..security import encrypt_text, encryption_configured, verify_basic_auth
 from ..services.cookie_service import (
@@ -63,12 +62,9 @@ async def api_parse_cookie_json(request: Request, _: str = Depends(verify_basic_
 @router.post("/api/cookies")
 async def api_create_cookie_profile(request: Request, _: str = Depends(verify_basic_auth)) -> JSONResponse:
     inferred_site = ""
-    allow_insecure = False
 
     if request.headers.get("content-type", "").startswith("application/json"):
         data = await request.json()
-        allow_insecure = parse_bool(data.get("allow_insecure"), default=False)
-
         payload = CookieProfileUpsertRequest.model_validate(data)
         name = payload.name.strip()
         site = payload.site.strip()
@@ -77,8 +73,6 @@ async def api_create_cookie_profile(request: Request, _: str = Depends(verify_ba
     else:
         form = await request.form()
         data = {key: value for key, value in form.items() if not isinstance(value, UploadFile)}
-        allow_insecure = parse_bool(data.get("allow_insecure"), default=False)
-
         name = str(data.get("name", "")).strip()
         site = str(data.get("site", "")).strip()
         cookie_value = str(data.get("cookie", "")).strip()
@@ -104,14 +98,10 @@ async def api_create_cookie_profile(request: Request, _: str = Depends(verify_ba
     if not name or not cookie_value:
         raise HTTPException(status_code=400, detail="name and cookie are required (cookie text or json file)")
 
-    if not encryption_configured() and not allow_insecure:
+    if not encryption_configured():
         raise HTTPException(
             status_code=400,
-            detail={
-                "message": "WEBUI_SECRET_KEY 未配置：为避免误以为 Cookie 已安全加密存储，默认禁止保存 Cookie 配置。请配置 WEBUI_SECRET_KEY 后重试；或勾选/确认“仍要以不安全回退密钥保存”。",
-                "encryption_configured": False,
-                "allow_insecure_supported": True,
-            },
+            detail="WEBUI_SECRET_KEY 未配置：Cookie 配置只能在启用有效密钥后保存。",
         )
 
     try:

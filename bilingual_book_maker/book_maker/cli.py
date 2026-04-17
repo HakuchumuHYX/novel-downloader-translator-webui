@@ -116,7 +116,7 @@ def main():
         "--model",
         dest="model",
         type=str,
-        default="chatgptapi",
+        default="openai",
         choices=translate_model_list,  # support DeepL later
         metavar="MODEL",
         help="model to use, available: {%(choices)s}",
@@ -239,9 +239,9 @@ So you are close to reaching the limit. You have to choose your own value, there
         type=str,
         help="""--retranslate "$translated_filepath" "file_name_in_epub" "start_str" "end_str"(optional)
         Retranslate from start_str to end_str's tag:
-        python3 "make_book.py" --book_name "test_books/animal_farm.epub" --retranslate 'test_books/animal_farm_bilingual.epub' 'index_split_002.html' 'in spite of the present book shortage which' 'This kind of thing is not a good symptom. Obviously'
+        python3 -m book_maker --book_name "test_books/animal_farm.epub" --retranslate 'test_books/animal_farm_翻译.epub' 'index_split_002.html' 'in spite of the present book shortage which' 'This kind of thing is not a good symptom. Obviously'
         Retranslate start_str's tag:
-        python3 "make_book.py" --book_name "test_books/animal_farm.epub" --retranslate 'test_books/animal_farm_bilingual.epub' 'index_split_002.html' 'in spite of the present book shortage which'
+        python3 -m book_maker --book_name "test_books/animal_farm.epub" --retranslate 'test_books/animal_farm_翻译.epub' 'index_split_002.html' 'in spite of the present book shortage which'
 """,
     )
     parser.add_argument(
@@ -266,7 +266,7 @@ So you are close to reaching the limit. You have to choose your own value, there
         "--temperature",
         type=float,
         default=1.0,
-        help="temperature parameter for `chatgptapi`/`gpt4`/`gpt4omini`/`gpt4o`/`gpt5mini`/`claude`/`gemini`",
+        help="temperature parameter for `openai`/`claude`/`gemini`",
     )
     parser.add_argument(
         "--source_lang",
@@ -284,7 +284,8 @@ So you are close to reaching the limit. You have to choose your own value, there
         "--model_list",
         type=str,
         dest="model_list",
-        help="Rather than using our preset lists of models, specify exactly the models you want as a comma separated list `gpt-4-32k,gpt-3.5-turbo-0125` (Currently only supports: `openai`)",
+        default="",
+        help="Specify backend models as a comma separated list, e.g. `gpt-5.2,gpt-4.1-mini`. Default for `openai` is `gpt-5.2`.",
     )
     parser.add_argument(
         "--batch",

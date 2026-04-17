@@ -31,13 +31,6 @@ PROMPT_ENV_MAP = {
     "system": "BBM_GEMINIAPI_SYS_MSG",
 }
 
-GEMINIPRO_MODEL_LIST = [
-    "gemini-1.5-pro",
-    "gemini-1.5-pro-latest",
-    "gemini-1.5-pro-001",
-    "gemini-1.5-pro-002",
-]
-
 GEMINIFLASH_MODEL_LIST = [
     "gemini-1.5-flash",
     "gemini-1.5-flash-latest",
@@ -177,9 +170,6 @@ class Gemini(Base):
 
     def set_interval(self, interval):
         self.interval = interval
-
-    def set_geminipro_models(self):
-        self.set_models(GEMINIPRO_MODEL_LIST)
 
     def set_geminiflash_models(self):
         self.set_models(GEMINIFLASH_MODEL_LIST)

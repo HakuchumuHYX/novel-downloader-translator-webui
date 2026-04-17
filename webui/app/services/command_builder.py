@@ -7,6 +7,8 @@ from ..config import AppConfig
 from ..option_registry import DOWNLOADER_CLI_OPTIONS, TRANSLATOR_CLI_OPTIONS, parse_bool
 from ..task_models import TaskPayload
 
+OPENAI_DEFAULT_MODEL_LIST = "gpt-5.2"
+
 
 def build_downloader_command(
     cfg: AppConfig,
@@ -59,11 +61,7 @@ def build_downloader_command(
     if payload.record_chapter_number:
         command.append("--record-chapter-number")
 
-    source_input = payload.source_input.strip()
-    if source_input.startswith("http://") or source_input.startswith("https://"):
-        command.extend(["--url", source_input])
-    else:
-        command.extend(["--novel_id", source_input])
+    command.extend(["--url", payload.source_input.strip()])
 
     if cookie_header:
         command.extend(["--cookie", cookie_header])
@@ -80,13 +78,15 @@ def build_translator_command(
     force_resume: bool = False,
     has_resume_state: bool = False,
 ) -> list[str]:
+    model = settings.get("model", "openai")
     command = [
         cfg.translator_python,
-        str(cfg.translator_entry),
+        "-m",
+        "book_maker",
         "--book_name",
         str(source_path),
         "--model",
-        settings.get("model", "openai"),
+        model,
         "--language",
         settings.get("language", "zh-hans"),
     ]
@@ -107,6 +107,11 @@ def build_translator_command(
         }:
             continue
         value = settings.get(key, "")
+        if key == "model_list":
+            if model == "openai":
+                value = value or OPENAI_DEFAULT_MODEL_LIST
+            elif model not in {"gemini", "groq"}:
+                value = ""
         if value != "":
             command.extend([flag, value])
 

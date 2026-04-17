@@ -77,7 +77,7 @@ def get_config() -> AppConfig:
         translator_entry=Path(
             os.getenv(
                 "TRANSLATOR_ENTRY",
-                str(project_root / "bilingual_book_maker" / "make_book.py"),
+                str(project_root / "bilingual_book_maker"),
             )
         ).resolve(),
     )
