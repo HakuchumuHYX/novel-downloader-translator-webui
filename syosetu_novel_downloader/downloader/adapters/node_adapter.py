@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import shutil as cmdshutil
 import subprocess
 import tempfile
 import time
@@ -170,7 +169,7 @@ class NodeNovelAdapter(BackendAdapter):
 
 
 def _build_node_command(*, site_id: str, output_dir: Path, url: str) -> list[str]:
-    npx = cmdshutil.which("npx")
+    npx = shutil.which("npx")
     if npx:
         return [
             npx,
@@ -183,7 +182,7 @@ def _build_node_command(*, site_id: str, output_dir: Path, url: str) -> list[str
             url,
         ]
 
-    npm = cmdshutil.which("npm")
+    npm = shutil.which("npm")
     if npm:
         return [
             npm,

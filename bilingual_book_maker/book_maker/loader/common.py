@@ -4,7 +4,6 @@ import builtins
 import json
 import os
 from pathlib import Path
-from typing import Any
 
 from book_maker.utils import prompt_config_to_kwargs
 

@@ -2,13 +2,10 @@ import os
 import re
 from asyncio import Semaphore, gather
 from collections.abc import Callable
-from enum import Enum
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
-from bs4 import BeautifulSoup, Tag  # type: ignore
-from deprecated import deprecated
-from pydantic import BaseModel
+from bs4 import BeautifulSoup  # type: ignore
 
 from custom_typing import ChapterContent, ChapterRange, ChapterTitle, NovelTitle, PartTitle
 from downloader.legacy_async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
@@ -166,29 +163,6 @@ class Syosetu:
         parts = await self.__get_novel_parts()
         return list(parts.keys())
 
-    @deprecated(version="0.1.0", reason="Feeling bad, so use __get_novel_parts instead")
-    async def __get_novel_parts2(self) -> dict[NovelTitle, ChapterRange]:
-        parts = {}
-        start = 1
-        current_title = None
-        count = 0
-
-        for element in self.__novel_info_soup.find_all(["div", "dl"], class_=["chapter_title", "novel_sublist2"]):
-            element: Tag
-            if element["class"][0] == "chapter_title":
-                if current_title is not None:
-                    parts[current_title] = range(start, start + count)
-                current_title = element.get_text(strip=True)
-                start += count
-                count = 0
-            elif element["class"][0] == "novel_sublist2":
-                count += 1
-
-        if current_title is not None:
-            parts[current_title] = range(start, start + count)
-
-        return parts
-
     def __get_novel_title(self) -> NovelTitle:
         node = self.__novel_info_soup.find("h1", class_="p-novel__title")
         if node is None:
@@ -268,16 +242,3 @@ class Syosetu:
                     for chapter_index in self.__get_chapters_range()
                 ]
             )
-
-
-class SaveFormat(Enum):
-    TXT = "txt"
-    EPUB = "epub"
-
-
-class SyosuteArgs(BaseModel):
-    novel_id: str
-    proxy: str
-    output_dir: str
-    save_format: SaveFormat
-    record_chapter_number: bool

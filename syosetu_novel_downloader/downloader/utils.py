@@ -44,50 +44,6 @@ def sanitize_filename(name: str, default: str = "book") -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text[:160] or default
 
-
-def parse_cookie_file(path: Path) -> str:
-    raw = path.read_text(encoding="utf-8", errors="ignore")
-    cookies: list[tuple[str, str]] = []
-
-    # Accept both:
-    # 1) Netscape cookie format lines
-    # 2) Header-style "a=b; c=d" (single or multi-line)
-    for line in raw.splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-
-        if "\t" in s:
-            parts = s.split("\t")
-            if len(parts) >= 7:
-                name = parts[5].strip()
-                value = parts[6].strip()
-                if name:
-                    cookies.append((name, value))
-            continue
-
-        # Header-like or loose key-value syntax in the file
-        # e.g. "a=b; c=d", or one cookie per line "a=b"
-        for seg in s.split(";"):
-            part = seg.strip()
-            if not part or "=" not in part:
-                continue
-            k, v = part.split("=", 1)
-            key = k.strip()
-            if not key:
-                continue
-            cookies.append((key, v.strip()))
-
-    dedup: list[str] = []
-    seen = set()
-    for key, value in cookies:
-        if key in seen:
-            continue
-        seen.add(key)
-        dedup.append(f"{key}={value}")
-    return "; ".join(dedup)
-
-
 def emit_progress(stage: str, current: int, total: int, unit: str) -> None:
     payload = {
         "stage": str(stage),
