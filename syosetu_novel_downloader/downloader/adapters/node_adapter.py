@@ -239,7 +239,10 @@ def _resolve_cookie_file(options: DownloadOptions) -> Path | None:
 
 def _find_node_work_root(temp_dir: Path) -> Path:
     candidates = [p for p in temp_dir.iterdir() if p.is_dir()]
+    direct_files_exist = any(p.is_file() for p in temp_dir.iterdir())
     if not candidates:
+        if direct_files_exist:
+            return temp_dir
         raise RuntimeError("Node backend did not produce output folders")
 
     # Most outputs are temp_dir/<site>/<work>

@@ -15,6 +15,7 @@ from ..db import get_conn
 from ..runtime import get_app_config, get_worker
 from ..schemas import TaskBatchActionRequest, TaskPurgeRequest, TaskTemplateCreateRequest
 from ..security import verify_basic_auth
+from ..time_utils import format_local_timestamp
 from ..services.settings_service import (
     load_settings,
     load_task_payload,
@@ -345,7 +346,7 @@ async def api_task_logs_stream(
                 for row in rows:
                     payload = {
                         "id": int(row["id"]),
-                        "created_at": row["created_at"],
+                        "created_at": format_local_timestamp(row["created_at"]),
                         "level": row["level"],
                         "message": row["message"],
                     }

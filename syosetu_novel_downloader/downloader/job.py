@@ -98,7 +98,9 @@ class DownloadJob:
             return [NativeFallbackAdapter()]
 
         # auto: prefer node, fallback native when available
-        if site in {"syosetu", "novel18"}:
+        if site == "novel18":
+            return [NativeFallbackAdapter(), NodeNovelAdapter()]
+        if site == "syosetu":
             return [NodeNovelAdapter(), NativeFallbackAdapter()]
         if site == "kakuyomu":
             return [NodeNovelAdapter(), NativeKakuyomuAdapter()]

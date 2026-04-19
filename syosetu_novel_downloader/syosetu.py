@@ -21,12 +21,14 @@ class Syosetu:
         proxy: str = "",
         base_url: str = MAIN_URL,
         over18: bool = False,
+        cookie_header: str = "",
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
         self.novel_id = novel_id
         self.proxy = proxy
         self.base_url = base_url.rstrip("/")
         self.over18 = over18
+        self.cookie_header = cookie_header.strip()
         self.novel_title: NovelTitle = ""
 
         self.record_chapter_index = False
@@ -38,9 +40,11 @@ class Syosetu:
         self.__session: aiohttp.ClientSession | None = None
 
     async def async_init(self):
-        cookies = {"over18": "yes"} if self.over18 else None
+        cookies = _parse_cookie_header(self.cookie_header)
+        if self.over18:
+            cookies["over18"] = "yes"
         self.__session: aiohttp.ClientSession = aiohttp.ClientSession(
-            cookies=cookies,
+            cookies=cookies or None,
         )
 
         self.__novel_info_soups = await self.__fetch_all_novel_info_pages()
@@ -241,3 +245,17 @@ class Syosetu:
                     for chapter_index in self.__get_chapters_range()
                 ]
             )
+
+
+def _parse_cookie_header(cookie_header: str) -> dict[str, str]:
+    cookies: dict[str, str] = {}
+    for chunk in str(cookie_header or "").split(";"):
+        text = chunk.strip()
+        if not text or "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key:
+            cookies[key] = value
+    return cookies

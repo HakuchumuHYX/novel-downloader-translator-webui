@@ -79,15 +79,15 @@
       </div>
       <div class="info-card">
         <span class="muted">创建时间</span>
-        <strong>{{ task.created_at }}</strong>
+        <strong id="created_at">{{ task.created_at }}</strong>
       </div>
       <div class="info-card">
         <span class="muted">开始时间</span>
-        <strong>{{ task.started_at or '未开始' }}</strong>
+        <strong id="started_at">{{ task.started_at or '未开始' }}</strong>
       </div>
       <div class="info-card">
         <span class="muted">结束时间</span>
-        <strong>{{ task.finished_at or '进行中' }}</strong>
+        <strong id="finished_at">{{ task.finished_at or '进行中' }}</strong>
       </div>
     </div>
 
@@ -380,6 +380,9 @@
     document.getElementById('parallel_workers').textContent = task.parallel_workers || '';
     document.getElementById('error').textContent = task.error_message || '';
     document.getElementById('error_code').textContent = task.error_code || '';
+    document.getElementById('created_at').textContent = task.created_at || '未知';
+    document.getElementById('started_at').textContent = task.started_at || '未开始';
+    document.getElementById('finished_at').textContent = task.finished_at || '进行中';
     document.getElementById('status-kpi').textContent = statusText(task.status);
     document.getElementById('source-kpi').textContent = sourceText(task.source_type);
     document.getElementById('mode-kpi').textContent = modeText(task.mode);

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from ..config import AppConfig
+from ..time_utils import format_local_timestamp
 from .preview_service import preview_epub_file, preview_pdf_file, preview_text_file
 from .task_service import (
     clear_artifacts,
@@ -21,7 +22,11 @@ from .task_service import (
 
 
 def row_to_dict(row: Any) -> dict[str, Any]:
-    return {key: row[key] for key in row.keys()}
+    data = {key: row[key] for key in row.keys()}
+    for key, value in list(data.items()):
+        if key.endswith("_at"):
+            data[key] = format_local_timestamp(value)
+    return data
 
 
 def normalize_page_size(value: int, default: int, maximum: int) -> int:

@@ -23,8 +23,6 @@ class NativeFallbackAdapter(BackendAdapter):
             return False
         if options.paid_policy != "skip":
             return False
-        if site == "novel18" and (options.cookie.strip() or options.cookie_file.strip()):
-            return False
         return True
 
     def fetch(self, options: DownloadOptions) -> DownloadResult:
@@ -33,8 +31,6 @@ class NativeFallbackAdapter(BackendAdapter):
             raise RuntimeError("Native fallback currently supports syosetu/novel18 only")
         if options.paid_policy != "skip":
             raise RuntimeError("Native fallback does not support paid_policy other than skip")
-        if site == "novel18" and (options.cookie.strip() or options.cookie_file.strip()):
-            raise RuntimeError("Native fallback does not support authenticated novel18 cookies")
 
         temp_dir = Path(tempfile.mkdtemp(prefix="_native_job_", dir=options.output_dir))
 
@@ -48,6 +44,7 @@ class NativeFallbackAdapter(BackendAdapter):
                         temp_dir,
                         base_url="https://novel18.syosetu.com",
                         over18=True,
+                        cookie_header=options.cookie,
                     )
                 )
             else:
@@ -58,6 +55,7 @@ class NativeFallbackAdapter(BackendAdapter):
                         temp_dir,
                         base_url="https://ncode.syosetu.com",
                         over18=False,
+                        cookie_header=options.cookie,
                     )
                 )
 
@@ -106,6 +104,7 @@ async def _run_native_download(
     *,
     base_url: str,
     over18: bool,
+    cookie_header: str,
 ) -> Path:
     def _progress_cb(current: int, total: int) -> None:
         emit_progress("download", current, total, "chapter")
@@ -115,6 +114,7 @@ async def _run_native_download(
         proxy,
         base_url=base_url,
         over18=over18,
+        cookie_header=cookie_header,
         progress_callback=_progress_cb,
     )
     await syosetu.async_init()
