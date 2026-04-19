@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup as bs
 from bs4.element import NavigableString
 from ebooklib import ITEM_DOCUMENT, epub
 
-from .epub_support import is_special_text, make_new_book
+from .epub_support import collect_translatable_nodes, is_special_text, make_new_book
 
 
 def load_resume_state(path: str) -> list[str]:
@@ -38,9 +38,11 @@ def save_temp_book(loader) -> None:
         for item in origin_book_temp.get_items():
             if item.get_type() == ITEM_DOCUMENT:
                 soup = bs(item.content, "html.parser")
-                p_list = soup.findAll(trans_taglist)
-                if loader.allow_navigable_strings:
-                    p_list.extend(soup.findAll(text=True))
+                p_list = collect_translatable_nodes(
+                    soup,
+                    trans_taglist,
+                    allow_navigable_strings=loader.allow_navigable_strings,
+                )
                 for paragraph in p_list:
                     if not paragraph.text or is_special_text(paragraph.text):
                         continue

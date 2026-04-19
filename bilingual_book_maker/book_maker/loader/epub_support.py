@@ -103,6 +103,32 @@ def filter_nested_nodes(p_list, trans_taglist):
     return [paragraph for paragraph in p_list if not has_nested_child(paragraph, trans_taglist)]
 
 
+def collect_text_nodes(soup) -> list[NavigableString]:
+    root = soup.body or soup
+    result: list[NavigableString] = []
+    for node in root.find_all(string=True):
+        parent_name = getattr(getattr(node, "parent", None), "name", "")
+        if parent_name in {"head", "meta", "script", "style", "title"}:
+            continue
+        result.append(node)
+    return result
+
+
+def collect_translatable_nodes(
+    soup,
+    trans_taglist,
+    *,
+    allow_navigable_strings: bool,
+):
+    paragraphs = filter_nested_nodes(soup.findAll(trans_taglist), trans_taglist)
+    if allow_navigable_strings:
+        paragraphs.extend(collect_text_nodes(soup))
+        return paragraphs
+    if paragraphs:
+        return paragraphs
+    return collect_text_nodes(soup)
+
+
 def should_translate_item(item, only_filelist: str, exclude_filelist: str) -> bool:
     if only_filelist and item.file_name not in only_filelist.split(","):
         return False
@@ -123,9 +149,11 @@ def count_translatable_nodes(
         return 0
 
     soup = bs(item.content, "html.parser")
-    paragraphs = filter_nested_nodes(soup.findAll(trans_taglist), trans_taglist)
-    if allow_navigable_strings:
-        paragraphs.extend(soup.findAll(text=True))
+    paragraphs = collect_translatable_nodes(
+        soup,
+        trans_taglist,
+        allow_navigable_strings=allow_navigable_strings,
+    )
 
     count = 0
     for paragraph in paragraphs:

@@ -1,10 +1,12 @@
 import ast
 import argparse
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from app.config import get_config
 from app.config import AppConfig, _normalize_translator_entry
+from app.db import _repair_legacy_settings
 from app.main import create_app
 from app.option_registry import DEFAULT_SETTINGS as REGISTRY_DEFAULT_SETTINGS, ENV_TO_SETTING, SETTING_TO_ENV
 from app.security import decrypt_text, encrypt_text, encryption_configured, sanitize_log
@@ -18,6 +20,8 @@ from app.services.worker_file_service import artifact_kind, resolve_source_file
 from app.services.task_management_service import delete_task_records
 from app.services.task_payload_service import build_task_payload
 from app.task_models import TaskPayload
+from book_maker.loader.epub_support import count_translatable_nodes
+from book_maker.translator.openai_translator import OpenAITranslator
 from cli_support import build_download_options
 
 VALID_FERNET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
@@ -180,6 +184,39 @@ def test_normalize_translator_entry_accepts_legacy_script_path():
     assert normalized == Path("/app/bilingual_book_maker")
 
 
+def test_repair_legacy_parallel_workers_default():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            is_secret INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO settings(key, value, is_secret, updated_at) VALUES(?, ?, 0, ?)",
+        ("parallel_workers", "1", "2026-03-06T04:05:45.451433+00:00"),
+    )
+    conn.execute(
+        "INSERT INTO settings(key, value, is_secret, updated_at) VALUES(?, ?, 0, ?)",
+        ("accumulated_num", "1", "2026-03-06T04:05:45.451433+00:00"),
+    )
+
+    _repair_legacy_settings(conn)
+
+    repaired_row = conn.execute(
+        "SELECT value, updated_at FROM settings WHERE key = 'parallel_workers'"
+    ).fetchone()
+    untouched_row = conn.execute("SELECT value FROM settings WHERE key = 'accumulated_num'").fetchone()
+    assert repaired_row["value"] == "5"
+    assert datetime.fromisoformat(repaired_row["updated_at"])
+    assert untouched_row["value"] == "1"
+
+
 def test_build_translator_command_uses_prompt_and_resume():
     cfg = AppConfig(
         base_dir=Path("/tmp/webui"),
@@ -283,6 +320,16 @@ def assert_init_has_parallel_workers(path: Path, class_name: str):
     raise AssertionError(f"could not find {class_name}.__init__ in {path}")
 
 
+def assert_class_has_method(path: Path, class_name: str, method_name: str):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == method_name:
+                    return
+    raise AssertionError(f"could not find {class_name}.{method_name} in {path}")
+
+
 def test_markdown_loader_accepts_parallel_workers():
     assert_init_has_parallel_workers(
         Path("/opt/translator_webui/bilingual_book_maker/book_maker/loader/md_loader.py"),
@@ -295,6 +342,42 @@ def test_srt_loader_accepts_parallel_workers():
         Path("/opt/translator_webui/bilingual_book_maker/book_maker/loader/srt_loader.py"),
         "SRTBookLoader",
     )
+
+
+def test_epub_loader_implements_make_new_book():
+    assert_class_has_method(
+        Path("/opt/translator_webui/bilingual_book_maker/book_maker/loader/epub_loader.py"),
+        "EPUBBookLoader",
+        "_make_new_book",
+    )
+
+
+def test_epub_count_translatable_nodes_falls_back_to_body_text():
+    class DummyItem:
+        file_name = "chap_1.xhtml"
+        content = (
+            b"<?xml version='1.0' encoding='utf-8'?><html><body><h1>\xe7\xab\xa0\xe8\x8a\x82</h1>"
+            b"\xe3\x81\x93\xe3\x82\x8c\xe3\x81\xaf\xe6\x9c\xac\xe6\x96\x87\xe3\x81\xa7\xe3\x81\x99\xe3\x80\x82"
+            b"</body></html>"
+        )
+
+    assert (
+        count_translatable_nodes(
+            DummyItem(),
+            ["p"],
+            allow_navigable_strings=False,
+            only_filelist="",
+            exclude_filelist="",
+        )
+        == 2
+    )
+
+
+def test_openai_translator_model_list_sets_immediate_model():
+    translator = OpenAITranslator("test-key", "zh-hans", api_base="https://example.com/v1")
+    translator.set_model_list(["deepseek-ai/DeepSeek-V3.2", "gpt-5.2"])
+    assert translator._model_list_values == ["deepseek-ai/DeepSeek-V3.2", "gpt-5.2"]
+    assert translator.model == "deepseek-ai/DeepSeek-V3.2"
 
 
 def test_import_env_unescapes_newlines():

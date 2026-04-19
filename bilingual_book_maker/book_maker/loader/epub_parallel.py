@@ -7,15 +7,31 @@ from bs4.element import NavigableString
 
 from book_maker.utils import num_tokens_from_text
 
-from .epub_support import extract_paragraph, filter_nested_nodes, is_special_text
+from .epub_support import collect_translatable_nodes, extract_paragraph, is_special_text
 from .helper import not_trans, shorter_result_link
 
 
 def create_chapter_translator(loader):
+    source = loader.translate_model
     try:
-        return deepcopy(loader.translate_model)
+        translator = deepcopy(source)
     except Exception:
-        return loader._create_translator_instance()
+        translator = loader._create_translator_instance()
+
+    deployment_id = getattr(source, "deployment_id", None)
+    if deployment_id and hasattr(translator, "set_deployment_id"):
+        translator.set_deployment_id(deployment_id)
+
+    model_list_values = list(getattr(source, "_model_list_values", []) or [])
+    if model_list_values and hasattr(translator, "set_model_list"):
+        translator.set_model_list(model_list_values)
+    elif getattr(source, "model", None):
+        translator.model = source.model
+
+    if hasattr(source, "interval") and hasattr(translator, "set_interval"):
+        translator.set_interval(source.interval)
+
+    return translator
 
 
 def translate_with_chapter_context(
@@ -157,10 +173,11 @@ def process_chapter_parallel(loader, chapter_data):
     try:
         thread_translator = create_chapter_translator(loader)
         soup = bs(item.content, "html.parser")
-        p_list = filter_nested_nodes(soup.findAll(trans_taglist), trans_taglist)
-
-        if loader.allow_navigable_strings:
-            p_list.extend(soup.findAll(text=True))
+        p_list = collect_translatable_nodes(
+            soup,
+            trans_taglist,
+            allow_navigable_strings=loader.allow_navigable_strings,
+        )
 
         chapter_context_list = []
         chapter_translated_list = []

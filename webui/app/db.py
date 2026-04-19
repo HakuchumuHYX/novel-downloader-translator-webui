@@ -53,6 +53,20 @@ def _rename_column_if_exists(conn: sqlite3.Connection, table: str, old_name: str
     conn.execute(f"ALTER TABLE {table} RENAME COLUMN {old_name} TO {new_name}")
 
 
+def _repair_legacy_settings(conn: sqlite3.Connection) -> None:
+    # The project-wide default parallelism is 5. Older persisted installs can
+    # still carry a stale saved value of 1, which unintentionally overrides the
+    # current default across the UI and new tasks.
+    conn.execute(
+        """
+        UPDATE settings
+        SET value = ?, updated_at = ?
+        WHERE key = 'parallel_workers' AND value = '1'
+        """,
+        ("5", utcnow_iso()),
+    )
+
+
 def init_db() -> None:
     cfg = get_config()
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
@@ -154,6 +168,7 @@ def init_db() -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_task_artifacts_task_path ON task_artifacts(task_id, file_path)"
         )
+        _repair_legacy_settings(conn)
         conn.commit()
     except sqlite3.OperationalError as exc:
         if "readonly" in str(exc).lower():

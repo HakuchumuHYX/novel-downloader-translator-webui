@@ -66,6 +66,8 @@ class OpenAITranslator(Base):
         self.deployment_id = None
         self.temperature = temperature
         self.model_list = None
+        self.model = None
+        self._model_list_values = []
         self.context_flag = context_flag
         self.context_list = []
         self.context_translated_list = []
@@ -405,23 +407,33 @@ class OpenAITranslator(Base):
 
     def set_default_models(self, ollama_model=""):
         if ollama_model:
-            self.model_list = cycle([ollama_model])
+            self._model_list_values = [ollama_model]
+            self.model_list = cycle(self._model_list_values)
+            self.model = self._model_list_values[0]
             return
         # gpt3 all models for save the limit
         if self.deployment_id:
-            self.model_list = cycle(["gpt-35-turbo"])
+            self._model_list_values = ["gpt-35-turbo"]
+            self.model_list = cycle(self._model_list_values)
+            self.model = self._model_list_values[0]
         else:
             my_model_list = [
                 i["id"] for i in self.openai_client.models.list().model_dump()["data"]
             ]
             model_list = list(set(my_model_list) & set(GPT35_MODEL_LIST))
             print(f"Using model list {model_list}")
-            self.model_list = cycle(model_list)
+            self._model_list_values = model_list
+            self.model_list = cycle(self._model_list_values)
+            if self._model_list_values:
+                self.model = self._model_list_values[0]
 
     def set_model_list(self, model_list):
-        model_list = list(set(model_list))
-        print(f"Using model list {model_list}")
-        self.model_list = cycle(model_list)
+        deduped_model_list = list(dict.fromkeys(model_list))
+        print(f"Using model list {deduped_model_list}")
+        self._model_list_values = deduped_model_list
+        self.model_list = cycle(self._model_list_values)
+        if self._model_list_values:
+            self.model = self._model_list_values[0]
 
     def batch_init(self, book_name):
         self.book_name = self.sanitize_book_name(book_name)

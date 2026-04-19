@@ -27,7 +27,7 @@ from .epub_plan import build_chapter_plan, total_paragraph_count
 from .epub_resume import load_resume_state, save_resume_state, save_temp_book
 from .epub_support import (
     extract_paragraph,
-    filter_nested_nodes,
+    collect_translatable_nodes,
     is_special_text,
     make_new_book,
     should_translate_item,
@@ -113,6 +113,9 @@ class EPUBBookLoader(BaseBookLoader):
             *self._translator_init_args,
             **self._translator_init_kwargs,
         )
+
+    def _make_new_book(self, book):
+        return make_new_book(book)
 
     def _process_paragraph(self, p, new_p, index, p_to_save_len, thread_safe=False):
         if self._is_saved_index(index):
@@ -273,7 +276,7 @@ class EPUBBookLoader(BaseBookLoader):
             ].file_name
             print(f"auto find fixname: {fixname}")
 
-        new_book = make_new_book(complete_book)
+        new_book = self._make_new_book(complete_book)
 
         complete_item = self.get_item(complete_book, fixname)
         if complete_item is None:
@@ -388,9 +391,11 @@ class EPUBBookLoader(BaseBookLoader):
 
         content = item.content
         soup = bs(content, "html.parser")
-        p_list = soup.findAll(trans_taglist)
-
-        p_list = filter_nested_nodes(p_list, trans_taglist)
+        p_list = collect_translatable_nodes(
+            soup,
+            trans_taglist,
+            allow_navigable_strings=self.allow_navigable_strings,
+        )
 
         if self.retranslate:
             new_p_list = []
@@ -407,10 +412,6 @@ class EPUBBookLoader(BaseBookLoader):
                 if fixend in text:
                     p_list = new_p_list
                     break
-
-        if self.allow_navigable_strings:
-            p_list.extend(soup.findAll(text=True))
-
         send_num = self.accumulated_num
         if send_num > 1:
             with open("log/buglog.txt", "a") as f:
@@ -541,7 +542,7 @@ class EPUBBookLoader(BaseBookLoader):
             self.context_flag,
         )
         self.batch_init_then_wait()
-        new_book = make_new_book(self.origin_book)
+        new_book = self._make_new_book(self.origin_book)
         all_items = list(self.origin_book.get_items())
         trans_taglist = self.translate_tags.split(",")
         all_p_length = total_paragraph_count(
