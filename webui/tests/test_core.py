@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from app.config import get_config
-from app.config import AppConfig
+from app.config import AppConfig, _normalize_translator_entry
 from app.main import create_app
 from app.option_registry import DEFAULT_SETTINGS as REGISTRY_DEFAULT_SETTINGS, ENV_TO_SETTING, SETTING_TO_ENV
 from app.security import decrypt_text, encrypt_text, encryption_configured, sanitize_log
@@ -172,6 +172,12 @@ def test_build_task_payload_normalizes_parallel_workers():
     assert payload.source_input == ""
     assert payload.upload_path == "/tmp/demo.txt"
     assert payload.settings_overrides["parallel_workers"] == "5"
+
+
+def test_normalize_translator_entry_accepts_legacy_script_path():
+    project_root = Path("/opt/translator_webui")
+    normalized = _normalize_translator_entry("/app/bilingual_book_maker/make_book.py", project_root)
+    assert normalized == Path("/app/bilingual_book_maker")
 
 
 def test_build_translator_command_uses_prompt_and_resume():

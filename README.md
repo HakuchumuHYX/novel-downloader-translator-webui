@@ -231,7 +231,7 @@ WEBUI_CONTAINER_USER=0:0
 | `DOWNLOADER_PYTHON` | `python` | 下载器 Python 命令 |
 | `DOWNLOADER_ENTRY` | `/app/syosetu_novel_downloader/main.py` | 下载器入口脚本 |
 | `TRANSLATOR_PYTHON` | `python` | 翻译器 Python 命令 |
-| `TRANSLATOR_ENTRY` | `/app/bilingual_book_maker/make_book.py` | 翻译器入口脚本 |
+| `TRANSLATOR_ENTRY` | `/app/bilingual_book_maker` | 翻译器工作目录 |
 | `WEBUI_CONTAINER_USER` | `app` | 容器运行用户（默认非 root） |
 
 ### E. 网络端口

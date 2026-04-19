@@ -34,7 +34,7 @@ RUN addgroup --system app \
 
 ENV WEBUI_DATA_DIR=/data \
     DOWNLOADER_ENTRY=/app/syosetu_novel_downloader/main.py \
-    TRANSLATOR_ENTRY=/app/bilingual_book_maker/make_book.py
+    TRANSLATOR_ENTRY=/app/bilingual_book_maker
 
 EXPOSE 7860
 

@@ -123,8 +123,7 @@
           placeholder="{{ settings.accumulated_num }}"></label>
       <label>最大并发线程数（parallel_workers）
         <input type="number" min="1" step="1" name="override__parallel_workers"
-          value="{{ settings.parallel_workers or '5' }}"
-          placeholder="5">
+          placeholder="{{ settings.parallel_workers or '5' }}">
         <div class="hint">TXT 按 batches 并发；EPUB 按 chapters 并发。</div>
       </label>
       <label>context_paragraph_limit <input type="text" name="override__context_paragraph_limit"

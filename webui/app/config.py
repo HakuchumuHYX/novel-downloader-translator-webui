@@ -35,6 +35,13 @@ class AppConfig:
     translator_entry: Path
 
 
+def _normalize_translator_entry(raw_value: str, project_root: Path) -> Path:
+    path = Path(raw_value or str(project_root / "bilingual_book_maker"))
+    if path.suffix.lower() == ".py":
+        path = path.parent
+    return path.resolve()
+
+
 @lru_cache(maxsize=1)
 def get_config() -> AppConfig:
     base_dir = Path(__file__).resolve().parents[2]
@@ -74,10 +81,11 @@ def get_config() -> AppConfig:
             )
         ).resolve(),
         translator_python=os.getenv("TRANSLATOR_PYTHON", "python"),
-        translator_entry=Path(
+        translator_entry=_normalize_translator_entry(
             os.getenv(
                 "TRANSLATOR_ENTRY",
                 str(project_root / "bilingual_book_maker"),
-            )
-        ).resolve(),
+            ),
+            project_root,
+        ),
     )
