@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup  # type: ignore
 
 from custom_typing import ChapterContent, ChapterRange, ChapterTitle, NovelTitle, PartTitle
 from downloader.async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
+from downloader.utils import sanitize_filename
 
 
 MAIN_URL: str = "https://ncode.syosetu.com"
@@ -152,13 +153,13 @@ class Syosetu:
             for title, nums in part_numbers.items():
                 unique_sorted = sorted(set(nums))
                 if unique_sorted:
-                    chapters[title] = range(min(unique_sorted), max(unique_sorted) + 1)
+                    chapters[title] = unique_sorted
             if chapters:
                 return chapters
 
         chapter_numbers = self.__extract_chapter_numbers()
         if chapter_numbers:
-            return {self.novel_title: range(min(chapter_numbers), max(chapter_numbers) + 1)}
+            return {self.novel_title: chapter_numbers}
 
         return {}
 
@@ -179,7 +180,7 @@ class Syosetu:
     def __get_chapters_range(self) -> ChapterRange:
         chapter_numbers = self.__extract_chapter_numbers()
         if chapter_numbers:
-            return range(min(chapter_numbers), max(chapter_numbers) + 1)
+            return chapter_numbers
 
         chapters = self.__novel_info_soup.find_all("dd")
         return range(1, len(chapters) + 1)
@@ -236,12 +237,12 @@ class Syosetu:
         if len(parts) != 0:
             for k, v in parts.items():
                 print(f"Start download part: {k}")
-                await _run_jobs([(chapter_index, os.path.join(output_dir, k)) for chapter_index in v])
+                await _run_jobs([(chapter_index, os.path.join(output_dir, sanitize_filename(k))) for chapter_index in v])
         else:
             print(f"Start download novel: {self.novel_title}")
             await _run_jobs(
                 [
-                    (chapter_index, os.path.join(output_dir, self.novel_title))
+                    (chapter_index, os.path.join(output_dir, sanitize_filename(self.novel_title)))
                     for chapter_index in self.__get_chapters_range()
                 ]
             )

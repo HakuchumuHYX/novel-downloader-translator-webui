@@ -7,6 +7,7 @@ from os import environ
 from itertools import cycle
 import json
 from threading import Lock
+from pathlib import Path
 
 from openai import AzureOpenAI, OpenAI, RateLimitError
 from rich import print
@@ -436,7 +437,9 @@ class OpenAITranslator(Base):
             self.model = self._model_list_values[0]
 
     def batch_init(self, book_name):
-        self.book_name = self.sanitize_book_name(book_name)
+        source_path = Path(book_name).resolve()
+        self.book_name = self.sanitize_book_name(source_path.name)
+        self.batch_base_dir = source_path.parent / "batch_files"
 
     def add_to_batch_translate_queue(self, book_index, text):
         self.batch_text_list.append({"book_index": book_index, "text": text})
@@ -449,10 +452,12 @@ class OpenAITranslator(Base):
         return sanitized_book_name
 
     def batch_metadata_file_path(self):
-        return os.path.join(os.getcwd(), "batch_files", f"{self.book_name}_info.json")
+        base_dir = getattr(self, "batch_base_dir", Path.cwd() / "batch_files")
+        return str(base_dir / f"{self.book_name}_info.json")
 
     def batch_dir(self):
-        return os.path.join(os.getcwd(), "batch_files", self.book_name)
+        base_dir = getattr(self, "batch_base_dir", Path.cwd() / "batch_files")
+        return str(base_dir / self.book_name)
 
     def custom_id(self, book_index):
         return f"{self.book_name}-{book_index}"
@@ -514,9 +519,8 @@ class OpenAITranslator(Base):
     def create_batch_context_messages(self, index):
         messages = []
         if self.context_flag:
-            if index % CHATGPT_CONFIG[
-                "batch_context_update_interval"
-            ] == 0 or not hasattr(self, "cached_context_messages"):
+            interval = max(1, int(OPENAI_CONFIG.get("batch_context_update_interval", 10)))
+            if index % interval == 0 or not hasattr(self, "cached_context_messages"):
                 context_messages = []
                 for i in range(index - 1, -1, -1):
                     item = self.batch_text_list[i]

@@ -8,6 +8,19 @@ from ..option_registry import normalize_parallel_workers, parse_bool
 from ..task_models import TaskPayload
 
 
+def _optional_positive_int(value: Any, field_name: str) -> int | None:
+    text = str(value or "").strip()
+    if not text or text == "0":
+        return None
+    try:
+        number = int(text)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if number < 1:
+        raise ValueError(f"{field_name} must be >= 1")
+    return number
+
+
 def build_task_payload(form: Any, template_payload: dict[str, Any], upload_path: str) -> TaskPayload:
     settings_overrides: dict[str, str] = dict(template_payload.get("settings_overrides", {}))
     for key, value in form.items():
@@ -28,10 +41,10 @@ def build_task_payload(form: Any, template_payload: dict[str, Any], upload_path:
             "source_type": str(form.get("source_type", template_payload.get("source_type", "upload"))).strip(),
             "source_input": str(form.get("source_input", template_payload.get("source_input", ""))).strip(),
             "upload_path": upload_path or template_payload.get("upload_path", ""),
-            "cookie_profile_id": int(
-                str(form.get("cookie_profile_id", template_payload.get("cookie_profile_id", "0")) or "0")
-            )
-            or None,
+            "cookie_profile_id": _optional_positive_int(
+                form.get("cookie_profile_id", template_payload.get("cookie_profile_id", "0")),
+                "cookie_profile_id",
+            ),
             "backend": str(form.get("backend", template_payload.get("backend", "auto"))).strip(),
             "paid_policy": str(form.get("paid_policy", template_payload.get("paid_policy", "skip"))).strip(),
             "save_format": str(form.get("save_format", template_payload.get("save_format", "txt"))).strip(),

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from ..models import BookMeta, Chapter, DownloadOptions, DownloadResult
-from ..utils import detect_site_from_url, emit_progress, sanitize_filename
+from ..utils import detect_site_from_url, emit_progress, is_content_txt, sanitize_filename
 from .base import BackendAdapter
 
 
@@ -58,11 +61,20 @@ class NodeNovelAdapter(BackendAdapter):
                 command,
                 cwd=str(Path(__file__).resolve().parents[2]),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
                 errors="ignore",
             )
+            output_tail: deque[str] = deque(maxlen=80)
+
+            def _drain_output() -> None:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    output_tail.append(line)
+
+            drain_thread = threading.Thread(target=_drain_output, daemon=True)
+            drain_thread.start()
 
             deadline = time.monotonic() + max(1, options.timeout)
             timed_out = False
@@ -92,25 +104,27 @@ class NodeNovelAdapter(BackendAdapter):
 
                 time.sleep(probe_interval)
 
-            stdout_text, stderr_text = process.communicate()
+            process.wait()
+            drain_thread.join(timeout=1)
+            output_text = "".join(output_tail).strip()
             if timed_out:
                 raise RuntimeError(
                     "Node backend failed: timeout after "
                     f"{options.timeout}s. "
-                    + (stderr_text.strip() or stdout_text.strip() or "unknown error")
+                    + (output_text or "unknown error")
                 )
 
             if process.returncode != 0:
                 raise RuntimeError(
                     "Node backend failed: "
-                    + (stderr_text.strip() or stdout_text.strip() or "unknown error")
+                    + (output_text or "unknown error")
                 )
 
             root = _find_node_work_root(temp_dir)
             metadata_json = _pick_metadata_json(root)
             meta_title, expected_count = _parse_node_metadata(metadata_json)
 
-            txt_files = sorted(root.rglob("*.txt"))
+            txt_files = _sort_content_txt_files(root.rglob("*.txt"))
             chapters = _parse_node_txt_chapters(root, txt_files)
 
             final_total = expected_count if expected_count > 0 else expected_total
@@ -275,7 +289,7 @@ def _pick_live_metadata_json(temp_dir: Path) -> Path | None:
 
 
 def _count_downloaded_txt(temp_dir: Path) -> int:
-    return sum(1 for p in temp_dir.rglob("*.txt") if p.is_file() and "README.txt" not in p.name)
+    return sum(1 for p in temp_dir.rglob("*.txt") if p.is_file() and is_content_txt(p))
 
 
 def _parse_node_metadata(path: Path | None) -> tuple[str, int]:
@@ -295,6 +309,20 @@ def _parse_node_metadata(path: Path | None) -> tuple[str, int]:
         expected = 0
 
     return title, expected
+
+
+def _natural_sort_key(path: Path) -> tuple:
+    parts: list[object] = []
+    for segment in path.parts:
+        for chunk in re.split(r"(\d+)", segment.lower()):
+            if not chunk:
+                continue
+            parts.append(int(chunk) if chunk.isdigit() else chunk)
+    return tuple(parts)
+
+
+def _sort_content_txt_files(paths) -> list[Path]:
+    return sorted((p for p in paths if p.is_file() and is_content_txt(p)), key=_natural_sort_key)
 
 
 def _parse_node_txt_chapters(root: Path, txt_files: list[Path]) -> list[Chapter]:

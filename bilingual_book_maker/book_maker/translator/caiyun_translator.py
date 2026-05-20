@@ -7,6 +7,9 @@ from rich import print
 
 from .base_translator import Base
 
+REQUEST_TIMEOUT = 30
+MAX_RETRIES = 3
+
 
 class Caiyun(Base):
     """
@@ -44,26 +47,29 @@ class Caiyun(Base):
             "request_id": "demo",
             "detect": True,
         }
-        response = requests.request(
-            "POST",
-            self.api_url,
-            data=json.dumps(payload),
-            headers=self.headers,
-        )
-        try:
-            t_text = response.json()["target"]
-        except Exception as e:
-            print(str(e), response.text, "will sleep 60s for the time limit")
-            if "limit" in response.json()["message"]:
-                print("will sleep 60s for the time limit")
-            time.sleep(60)
-            response = requests.request(
-                "POST",
-                self.api_url,
-                data=json.dumps(payload),
-                headers=self.headers,
-            )
-            t_text = response.json()["target"]
+        last_error: Exception | None = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = requests.request(
+                    "POST",
+                    self.api_url,
+                    data=json.dumps(payload),
+                    headers=self.headers,
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if response.status_code in {429, 500, 502, 503, 504}:
+                    raise requests.HTTPError(f"HTTP {response.status_code}: {response.text}", response=response)
+                response.raise_for_status()
+                t_text = response.json()["target"]
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt == MAX_RETRIES - 1:
+                    raise
+                print(f"{exc}; retrying Caiyun request")
+                time.sleep(2 ** attempt)
+        else:
+            raise last_error or RuntimeError("Caiyun request failed")
 
         print("[bold green]" + re.sub("\n{3,}", "\n\n", t_text) + "[/bold green]")
         # for issue #279

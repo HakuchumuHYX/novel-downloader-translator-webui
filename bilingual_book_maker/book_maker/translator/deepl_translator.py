@@ -9,6 +9,9 @@ from book_maker.utils import LANGUAGES, TO_LANGUAGE_CODE
 from .base_translator import Base
 from rich import print
 
+REQUEST_TIMEOUT = 30
+MAX_RETRIES = 3
+
 
 class DeepL(Base):
     """
@@ -67,22 +70,28 @@ class DeepL(Base):
         self.rotate_key()
         print(text)
         payload = {"text": text, "source": "EN", "target": self.language}
-        try:
-            response = requests.request(
-                "POST",
-                self.api_url,
-                data=json.dumps(payload),
-                headers=self.headers,
-            )
-        except Exception as e:
-            print(e)
-            time.sleep(30)
-            response = requests.request(
-                "POST",
-                self.api_url,
-                data=json.dumps(payload),
-                headers=self.headers,
-            )
-        t_text = response.json().get("text", "")
+        last_error: Exception | None = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = requests.request(
+                    "POST",
+                    self.api_url,
+                    data=json.dumps(payload),
+                    headers=self.headers,
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if response.status_code in {429, 500, 502, 503, 504}:
+                    raise requests.HTTPError(f"HTTP {response.status_code}: {response.text}", response=response)
+                response.raise_for_status()
+                t_text = response.json().get("text", "")
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt == MAX_RETRIES - 1:
+                    raise
+                print(exc)
+                time.sleep(2 ** attempt)
+        else:
+            raise last_error or RuntimeError("DeepL request failed")
         print("[bold green]" + re.sub("\n{3,}", "\n\n", t_text) + "[/bold green]")
         return t_text

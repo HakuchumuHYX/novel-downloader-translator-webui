@@ -6,6 +6,9 @@ import requests
 from rich import print
 from .base_translator import Base
 
+REQUEST_TIMEOUT = 10
+MAX_RETRIES = 3
+
 
 class TencentTranSmart(Base):
     """
@@ -31,6 +34,27 @@ class TencentTranSmart(Base):
     def rotate_key(self):
         pass
 
+    def _post(self, payload):
+        last_error: Exception | None = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = self.session.post(
+                    self.api_url,
+                    json=payload,
+                    headers=self.header,
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if response.status_code in {429, 500, 502, 503, 504}:
+                    raise requests.HTTPError(f"HTTP {response.status_code}: {response.text}", response=response)
+                response.raise_for_status()
+                return response
+            except Exception as exc:
+                last_error = exc
+                if attempt == MAX_RETRIES - 1:
+                    raise
+                time.sleep(2 ** attempt)
+        raise last_error or RuntimeError("Tencent TranSmart request failed")
+
     def translate(self, text):
         print(text)
         source_language, text_list = self.text_analysis(text)
@@ -49,9 +73,7 @@ class TencentTranSmart(Base):
             "target": {"lang": self.translate_type},
         }
 
-        response = self.session.post(
-            self.api_url, json=api_form_data, headers=self.header, timeout=3
-        )
+        response = self._post(api_form_data)
         t_text = "".join(response.json()["auto_translation"])
         print("[bold green]" + re.sub("\n{3,}", "\n\n", t_text) + "[/bold green]")
         return t_text
@@ -70,11 +92,9 @@ class TencentTranSmart(Base):
             "type": "plain",
             "normalize": {"merge_broken_line": "false"},
         }
-        r = self.session.post(
-            self.api_url, json=analysis_request_data, headers=self.header
-        )
+        r = self._post(analysis_request_data)
         if not r.ok:
-            return text
+            return "auto", [text]
         response_json_data = r.json()
         text_list = [item["tgt_str"] for item in response_json_data["sentence_list"]]
         language = response_json_data["language"]

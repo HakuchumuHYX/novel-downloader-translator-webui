@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import traceback
+from pathlib import Path
 
 from book_maker.cli_support import configure_loader_from_options, parse_prompt_arg, resolve_api_key
 from book_maker.loader import BOOK_LOADER_DICT
@@ -338,7 +339,7 @@ So you are close to reaching the limit. You have to choose your own value, there
             )
         options.book_name = obok.cli_main(device_path)
 
-    book_type = options.book_name.split(".")[-1]
+    book_type = Path(options.book_name).suffix.lower().lstrip(".")
     support_type_list = list(BOOK_LOADER_DICT.keys())
     if book_type not in support_type_list:
         raise Exception(

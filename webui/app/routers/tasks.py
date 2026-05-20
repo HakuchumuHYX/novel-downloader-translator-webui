@@ -64,8 +64,14 @@ async def api_create_task(
 
     template_id_raw = str(form.get("template_id", "")).strip()
     if template_id_raw:
+        try:
+            template_id = int(template_id_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="template_id must be an integer") from exc
+        if template_id < 1:
+            raise HTTPException(status_code=400, detail="template_id must be >= 1")
         with get_conn() as conn:
-            template_row = get_task_template(conn, int(template_id_raw))
+            template_row = get_task_template(conn, template_id)
         if not template_row:
             raise HTTPException(status_code=404, detail="Template not found")
         payload = load_task_payload(template_row)
@@ -80,20 +86,32 @@ async def api_create_task(
         target = get_app_config().upload_root / temp_name
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        with target.open("wb") as file_obj:
-            while True:
-                chunk = await upload_file.read(1024 * 1024)
-                if not chunk:
-                    break
-                file_obj.write(chunk)
-
-        await upload_file.close()
+        bytes_written = 0
+        max_upload_bytes = get_app_config().max_upload_bytes
+        try:
+            with target.open("wb") as file_obj:
+                while True:
+                    chunk = await upload_file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    bytes_written += len(chunk)
+                    if bytes_written > max_upload_bytes:
+                        raise HTTPException(status_code=413, detail="Upload too large")
+                    file_obj.write(chunk)
+        except Exception:
+            safe_delete_upload_file(str(target), get_app_config())
+            raise
+        finally:
+            await upload_file.close()
         upload_path = str(target)
 
-    task_payload_model = build_task_payload(form, payload, upload_path)
-    task_payload = task_payload_model.to_record()
-
     try:
+        try:
+            task_payload_model = build_task_payload(form, payload, upload_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        task_payload = task_payload_model.to_record()
+
         validation = validate_task_payload(task_payload)
         if not validation.ok:
             raise HTTPException(status_code=400, detail=validation.message)

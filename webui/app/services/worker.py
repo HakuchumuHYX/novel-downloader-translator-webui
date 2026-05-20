@@ -70,6 +70,15 @@ class TaskWorker(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+        with self._proc_lock:
+            running = list(self._running.items())
+            for task_id, process in running:
+                if process.poll() is None:
+                    self._terminate_reason[task_id] = "shutdown"
+
+        for _, process in running:
+            if process.poll() is None:
+                self._terminate_process(process, reason="shutdown")
 
     def stop_task(self, task_id: int) -> bool:
         with get_conn() as conn:
@@ -369,7 +378,7 @@ class TaskWorker(threading.Thread):
                 else:
                     self._log(task_id, f"Cookie profile {cookie_profile_id} is empty", level="warning")
 
-        command, forced_merge_for_translate = build_downloader_command(
+        command, forced_merge_for_translate, extra_env = build_downloader_command(
             cfg,
             payload_model,
             settings,
@@ -383,12 +392,16 @@ class TaskWorker(threading.Thread):
                 level="warning",
             )
 
-        timeout_seconds = int(
-            payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds
-        )
+        timeout_seconds = self._timeout_seconds(payload, settings)
 
         self._log(task_id, "Running downloader command")
-        self._run_command(task_id, command, cwd=str(cfg.downloader_entry.parent), timeout_seconds=timeout_seconds)
+        self._run_command(
+            task_id,
+            command,
+            cwd=str(cfg.downloader_entry.parent),
+            timeout_seconds=timeout_seconds,
+            extra_env=extra_env,
+        )
 
         source_path = resolve_source_file(
             download_root,
@@ -430,7 +443,7 @@ class TaskWorker(threading.Thread):
                 f"Resume requested but state file not found: {translate_resume_state_path(source_path)}; running without --resume.",
                 level="warning",
             )
-        command = build_translator_command(
+        command, extra_env = build_translator_command(
             cfg,
             source_path,
             payload_model,
@@ -439,9 +452,15 @@ class TaskWorker(threading.Thread):
             has_resume_state=has_resume_state,
         )
 
-        timeout_seconds = int(payload.get("process_timeout") or settings.get("process_timeout") or cfg.process_timeout_seconds)
+        timeout_seconds = self._timeout_seconds(payload, settings)
         self._log(task_id, "Running translator command")
-        self._run_command(task_id, command, cwd=str(cfg.translator_entry), timeout_seconds=timeout_seconds)
+        self._run_command(
+            task_id,
+            command,
+            cwd=str(cfg.translator_entry),
+            timeout_seconds=timeout_seconds,
+            extra_env=extra_env,
+        )
 
         translated = resolve_translated_file(source_path)
         if translated and translated.exists():
@@ -533,7 +552,25 @@ class TaskWorker(threading.Thread):
 
         self._apply_progress_event_to_db(task_id, evt_copy)
 
-    def _run_command(self, task_id: int, command: list[str], cwd: str, timeout_seconds: int) -> None:
+    def _timeout_seconds(self, payload: dict[str, Any], settings: dict[str, str]) -> int:
+        raw_value = payload.get("process_timeout") or settings.get("process_timeout") or get_config().process_timeout_seconds
+        try:
+            return max(60, int(str(raw_value).strip()))
+        except ValueError as exc:
+            raise ValueError(f"process_timeout must be an integer >= 60: {raw_value}") from exc
+
+    def _run_command(
+        self,
+        task_id: int,
+        command: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        extra_env: dict[str, str] | None = None,
+    ) -> None:
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -543,6 +580,7 @@ class TaskWorker(threading.Thread):
             encoding="utf-8",
             errors="replace",
             start_new_session=True,
+            env=env,
         )
         self._register_process(task_id, process)
 
@@ -660,6 +698,8 @@ class TaskWorker(threading.Thread):
                 raise RuntimeError("__TASK_PAUSED__")
             if rc < 0 and local_reason == "stopped":
                 raise RuntimeError("__TASK_STOPPED__")
+            if rc < 0 and local_reason == "shutdown":
+                raise RuntimeError("__TASK_STOPPED__")
 
             if paused:
                 raise RuntimeError("__TASK_PAUSED__")
@@ -719,15 +759,15 @@ class TaskWorker(threading.Thread):
                     continue
 
                 task_id = int(row["id"])
-                task_dir = cfg.task_root / str(task_id)
-                if task_dir.exists():
-                    shutil.rmtree(task_dir, ignore_errors=True)
-
                 has_children = conn.execute(
                     "SELECT 1 FROM tasks WHERE parent_task_id = ? LIMIT 1",
                     (task_id,),
                 ).fetchone()
                 if has_children:
                     continue
+
+                task_dir = cfg.task_root / str(task_id)
+                if task_dir.exists():
+                    shutil.rmtree(task_dir, ignore_errors=True)
 
                 conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))

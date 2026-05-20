@@ -260,3 +260,4 @@ class QwenTranslator(Base):
             print(
                 f"[red]Invalid Qwen model: {model_name}. Using default: {self.model}[/red]"
             )
+        return self.model

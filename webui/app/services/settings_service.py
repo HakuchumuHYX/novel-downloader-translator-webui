@@ -108,20 +108,50 @@ def validate_task_payload(payload: dict[str, Any]) -> ValidationResult:
     return ValidationResult(ok, message)
 
 
+def _validate_number(
+    settings: dict[str, str],
+    key: str,
+    *,
+    integer: bool = False,
+    min_value: float | int | None = None,
+) -> str:
+    value = str(settings.get(key, "")).strip()
+    if value == "":
+        return ""
+    try:
+        number = int(value) if integer else float(value)
+    except ValueError:
+        return f"{key} must be {'an integer' if integer else 'a number'}"
+    if min_value is not None and number < min_value:
+        return f"{key} must be >= {min_value}"
+    return ""
+
+
 def validate_translation_settings(settings: dict[str, str]) -> ValidationResult:
     deployment_id = str(settings.get("deployment_id", "")).strip()
     api_base = str(settings.get("api_base", "")).strip()
-    interval = str(settings.get("interval", "")).strip()
 
     if deployment_id and not api_base:
         return ValidationResult(False, "deployment_id requires api_base")
 
-    if interval:
-        try:
-            if float(interval) < 0:
-                return ValidationResult(False, "interval must be >= 0")
-        except ValueError:
-            return ValidationResult(False, "interval must be a number")
+    checks = (
+        ("interval", False, 0),
+        ("timeout", True, 1),
+        ("retries", True, 0),
+        ("rate_limit", False, 0),
+        ("cleanup_days", True, 0),
+        ("process_timeout", True, 60),
+        ("temperature", False, 0),
+        ("test_num", True, 1),
+        ("accumulated_num", True, 1),
+        ("context_paragraph_limit", True, 0),
+        ("block_size", True, -1),
+        ("batch_size", True, 1),
+    )
+    for key, integer, min_value in checks:
+        message = _validate_number(settings, key, integer=integer, min_value=min_value)
+        if message:
+            return ValidationResult(False, message)
 
     return ValidationResult(True)
 

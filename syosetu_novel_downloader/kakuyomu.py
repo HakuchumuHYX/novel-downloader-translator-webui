@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup  # type: ignore
 
 from custom_typing import ChapterContent, ChapterTitle, NovelTitle
 from downloader.async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
+from downloader.utils import sanitize_filename
 
 
 class Kakuyomu:
@@ -163,7 +164,7 @@ class Kakuyomu:
         self.total_chapters = len(self.__episode_urls)
         results = await collect_results(
             [
-                self.async_fetch(idx, episode_url, os.path.join(output_dir, self.novel_title))
+                self.async_fetch(idx, episode_url, os.path.join(output_dir, sanitize_filename(self.novel_title)))
                 for idx, episode_url in enumerate(self.__episode_urls, start=1)
             ],
             total=self.total_chapters,

@@ -6,10 +6,36 @@ from functools import lru_cache
 from pathlib import Path
 
 
-def _as_bool(value: str, default: bool = False) -> bool:
+def _as_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _as_int(value: str | None, default: int, *, min_value: int | None = None) -> int:
+    if value is None or value.strip() == "":
+        number = default
+    else:
+        try:
+            number = int(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"Invalid integer config value: {value}") from exc
+    if min_value is not None:
+        number = max(min_value, number)
+    return number
+
+
+def _as_float(value: str | None, default: float, *, min_value: float | None = None) -> float:
+    if value is None or value.strip() == "":
+        number = default
+    else:
+        try:
+            number = float(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"Invalid float config value: {value}") from exc
+    if min_value is not None:
+        number = max(min_value, number)
+    return number
 
 
 @dataclass(frozen=True)
@@ -29,6 +55,7 @@ class AppConfig:
     require_secret_key: bool
     process_timeout_seconds: int
     stop_grace_seconds: int
+    max_upload_bytes: int
     downloader_python: str
     downloader_entry: Path
     translator_python: str
@@ -60,8 +87,8 @@ def get_config() -> AppConfig:
         db_path=db_path,
         task_root=task_root,
         upload_root=upload_root,
-        worker_interval_seconds=float(os.getenv("WEBUI_WORKER_INTERVAL", "1.0")),
-        cleanup_days=int(os.getenv("WEBUI_CLEANUP_DAYS", "14")),
+        worker_interval_seconds=_as_float(os.getenv("WEBUI_WORKER_INTERVAL"), 1.0, min_value=0.1),
+        cleanup_days=_as_int(os.getenv("WEBUI_CLEANUP_DAYS"), 14, min_value=0),
         app_env=app_env,
         enforce_secure_defaults=_as_bool(
             os.getenv("WEBUI_ENFORCE_SECURE_DEFAULTS", "true" if default_enforce_secure else "false"),
@@ -71,8 +98,9 @@ def get_config() -> AppConfig:
         basic_auth_password=os.getenv("WEBUI_BASIC_AUTH_PASSWORD", "change_me"),
         secret_key=os.getenv("WEBUI_SECRET_KEY", ""),
         require_secret_key=_as_bool(os.getenv("WEBUI_REQUIRE_SECRET_KEY", "false")),
-        process_timeout_seconds=max(60, int(os.getenv("WEBUI_PROCESS_TIMEOUT", "7200"))),
-        stop_grace_seconds=max(1, int(os.getenv("WEBUI_STOP_GRACE_SECONDS", "8"))),
+        process_timeout_seconds=_as_int(os.getenv("WEBUI_PROCESS_TIMEOUT"), 7200, min_value=60),
+        stop_grace_seconds=_as_int(os.getenv("WEBUI_STOP_GRACE_SECONDS"), 8, min_value=1),
+        max_upload_bytes=_as_int(os.getenv("WEBUI_MAX_UPLOAD_BYTES"), 104857600, min_value=1),
         downloader_python=os.getenv("DOWNLOADER_PYTHON", "python"),
         downloader_entry=Path(
             os.getenv(

@@ -1,9 +1,12 @@
+import html
 import json
 import os
 import re
 from typing import Iterable
 
 from ebooklib import epub
+
+from downloader.utils import is_content_txt
 
 
 def create_epub_from_txt(file_path, output_folder):
@@ -32,7 +35,9 @@ def create_epub_from_txt(file_path, output_folder):
             file_name=f"chap_{i + 1}.xhtml",
             lang="ja",
         )
-        c.content = "<h1>" + chapter_title + "</h1>" + chapter_body
+        safe_title = html.escape(chapter_title)
+        safe_body = html.escape(chapter_body).replace("\n", "<br/>")
+        c.content = "<h1>" + safe_title + "</h1><p>" + safe_body + "</p>"
 
         book.add_item(c)
 
@@ -77,7 +82,7 @@ def merge_chapters_to_txt(chapters: Iterable, output_path: str, record_chapter_n
 
 
 def merge_txt_files(input_dir, merged_filename="book.txt"):
-    all_txt_files = [f for f in os.listdir(input_dir) if f.endswith(".txt")]
+    all_txt_files = [f for f in os.listdir(input_dir) if is_content_txt(f)]
     if not all_txt_files:
         raise FileNotFoundError(f"No txt files found in {input_dir}")
 
@@ -142,7 +147,7 @@ def _sort_txt_files_for_merge(input_dir: str, txt_files: list[str]) -> list[str]
 def convert_directory_txt_to_epub(*args):
     dir = os.path.join(*args)
     for file in os.listdir(dir):
-        if file.endswith(".txt"):
+        if is_content_txt(file):
             create_epub_from_txt(os.path.join(dir, file), dir)
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 from .models import SiteId
@@ -37,6 +38,28 @@ def sanitize_filename(name: str, default: str = "book") -> str:
     text = re.sub(r'[\\/:*?"<>|]+', "_", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:160] or default
+
+
+def extract_syosetu_novel_id(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    for segment in parsed.path.split("/"):
+        text = segment.strip()
+        if text:
+            return text.lower()
+    raise ValueError(f"Invalid Syosetu novel URL: {url}")
+
+
+def is_content_txt(path_or_name) -> bool:
+    name = Path(path_or_name).name.lower()
+    if not name.endswith(".txt"):
+        return False
+    stem = Path(name).stem
+    if stem.startswith("readme"):
+        return False
+    if "metadata" in stem or "manifest" in stem:
+        return False
+    return True
+
 
 def emit_progress(stage: str, current: int, total: int, unit: str) -> None:
     payload = {

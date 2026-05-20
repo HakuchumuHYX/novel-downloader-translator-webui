@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -91,8 +92,8 @@ def build_download_options(args: argparse.Namespace) -> DownloadOptions:
         record_chapter_number=args.record_chapter_number,
         merge_all=args.merge_all,
         merged_name=args.merged_name,
-        cookie=args.cookie,
-        cookie_file=args.cookie_file,
+        cookie=args.cookie or os.getenv("DOWNLOADER_COOKIE", ""),
+        cookie_file=args.cookie_file or os.getenv("DOWNLOADER_COOKIE_FILE", ""),
         paid_policy=args.paid_policy,
         rate_limit=max(0.0, args.rate_limit),
         retries=max(0, args.retries),
@@ -115,9 +116,9 @@ def postprocess_download_output(args: argparse.Namespace, result: DownloadResult
         merge_chapters_to_txt,
         merge_txt_files,
     )
-    from downloader.utils import sanitize_filename
+    from downloader.utils import is_content_txt, sanitize_filename
 
-    txt_files = list(novel_dir.glob("*.txt"))
+    txt_files = [path for path in novel_dir.glob("*.txt") if is_content_txt(path)]
     if not txt_files:
         print("No txt files were produced. Check manifest.json for details.")
         return

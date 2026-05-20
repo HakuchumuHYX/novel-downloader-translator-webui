@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from ..config import AppConfig
-from ..option_registry import DOWNLOADER_CLI_OPTIONS, TRANSLATOR_CLI_OPTIONS, parse_bool
+from ..option_registry import DOWNLOADER_CLI_OPTIONS, SETTING_DEFINITION_MAP, TRANSLATOR_CLI_OPTIONS, parse_bool
 from ..task_models import TaskPayload
 
 OPENAI_DEFAULT_MODEL_LIST = "gpt-5.2"
@@ -17,7 +17,7 @@ def build_downloader_command(
     download_root: Path,
     *,
     cookie_header: str = "",
-) -> tuple[list[str], bool]:
+) -> tuple[list[str], bool, dict[str, str]]:
     site_map = {
         "syosetu": "syosetu",
         "syosetu-r18": "novel18",
@@ -63,10 +63,11 @@ def build_downloader_command(
 
     command.extend(["--url", payload.source_input.strip()])
 
+    extra_env: dict[str, str] = {}
     if cookie_header:
-        command.extend(["--cookie", cookie_header])
+        extra_env["DOWNLOADER_COOKIE"] = cookie_header
 
-    return command, translating_task and not merge_all_enabled
+    return command, translating_task and not merge_all_enabled, extra_env
 
 
 def build_translator_command(
@@ -77,7 +78,7 @@ def build_translator_command(
     *,
     force_resume: bool = False,
     has_resume_state: bool = False,
-) -> list[str]:
+) -> tuple[list[str], dict[str, str]]:
     model = settings.get("model", "openai")
     command = [
         cfg.translator_python,
@@ -91,6 +92,7 @@ def build_translator_command(
         settings.get("language", "zh-hans"),
     ]
 
+    extra_env: dict[str, str] = {}
     for key, flag in TRANSLATOR_CLI_OPTIONS:
         if key in {
             "model",
@@ -112,8 +114,13 @@ def build_translator_command(
                 value = value or OPENAI_DEFAULT_MODEL_LIST
             elif model not in {"gemini", "groq"}:
                 value = ""
-        if value != "":
-            command.extend([flag, value])
+        if value == "":
+            continue
+        definition = SETTING_DEFINITION_MAP.get(key)
+        if definition and definition.is_secret and definition.env_key:
+            extra_env[definition.env_key] = value
+            continue
+        command.extend([flag, value])
 
     prompt_file = settings.get("prompt_file", "")
     prompt_text = settings.get("prompt_text", "")
@@ -145,4 +152,4 @@ def build_translator_command(
     if payload.translation_output_mode == "translated_only":
         command.append("--single_translate")
 
-    return command
+    return command, extra_env

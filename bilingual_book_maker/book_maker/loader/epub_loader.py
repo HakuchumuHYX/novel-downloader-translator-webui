@@ -30,6 +30,7 @@ from .epub_support import (
     collect_translatable_nodes,
     is_special_text,
     make_new_book,
+    node_text,
     should_translate_item,
 )
 from .helper import EPUBBookLoaderHelper, not_trans
@@ -119,31 +120,30 @@ class EPUBBookLoader(BaseBookLoader):
 
     def _process_paragraph(self, p, new_p, index, p_to_save_len, thread_safe=False):
         if self._is_saved_index(index):
-            cached = self._get_saved_value(index)
-            p.string = cached
-            new_p.string = cached
+            translated_text = self._get_saved_value(index)
         else:
-            t_text = ""
+            translated_text = ""
             if self.batch_flag:
-                self.translate_model.add_to_batch_translate_queue(index, new_p.text)
+                self.translate_model.add_to_batch_translate_queue(index, node_text(new_p))
             elif self.batch_use_flag:
-                t_text = self.translate_model.batch_translate(index)
+                translated_text = self.translate_model.batch_translate(index)
             else:
-                t_text = self.translate_model.translate(new_p.text)
-            if t_text is None:
+                translated_text = self.translate_model.translate(node_text(new_p))
+            if translated_text is None:
                 raise RuntimeError(
                     "`t_text` is None: your translation model is not working as expected. Please check your translation model configuration."
                 )
-            if type(p) is NavigableString:
-                new_p = t_text
-                self._set_saved_value(index, str(new_p))
-            else:
-                new_p.string = t_text
-                self._set_saved_value(index, new_p.text)
+            self._set_saved_value(index, str(translated_text))
 
-        self.helper.insert_trans(
-            p, new_p.string, self.translation_style, self.single_translate
-        )
+        if isinstance(p, NavigableString):
+            translated_node = NavigableString(str(translated_text))
+            p.insert_after(translated_node)
+            if self.single_translate:
+                p.extract()
+        else:
+            self.helper.insert_trans(
+                p, str(translated_text), self.translation_style, self.single_translate
+            )
         index += 1
 
         if thread_safe:
@@ -164,7 +164,7 @@ class EPUBBookLoader(BaseBookLoader):
             if self.resume and index < p_to_save_len:
                 p.string = self.p_to_save[index]
             else:
-                p_text = p.text.rstrip()
+                p_text = node_text(p).rstrip()
                 text.append(p_text)
 
             if self.is_test and index >= self.test_num:
@@ -185,14 +185,16 @@ class EPUBBookLoader(BaseBookLoader):
                 else:
                     p = p_block[i]
 
-                if type(p) is NavigableString:
-                    p = t
+                if isinstance(p, NavigableString):
+                    translated_node = NavigableString(t)
+                    p.insert_after(translated_node)
+                    if self.single_translate:
+                        p.extract()
                 else:
                     p.string = t
-
-                self.helper.insert_trans(
-                    p, p.string, self.translation_style, self.single_translate
-                )
+                    self.helper.insert_trans(
+                        p, p.string, self.translation_style, self.single_translate
+                    )
 
         if thread_safe:
             with self._progress_lock:
@@ -217,12 +219,12 @@ class EPUBBookLoader(BaseBookLoader):
                     pt.extract()
 
             if any(
-                [not p.text, is_special_text(temp_p.text), not_trans(temp_p.text)]
+                [not node_text(p), is_special_text(node_text(temp_p)), not_trans(node_text(temp_p))]
             ):
                 if i == len(p_list) - 1:
                     self.helper.deal_old(wait_p_list, self.single_translate)
                 continue
-            length = num_tokens_from_text(temp_p.text)
+            length = num_tokens_from_text(node_text(temp_p))
             if length > send_num:
                 self.helper.deal_new(p, wait_p_list, self.single_translate)
                 continue
@@ -305,9 +307,9 @@ class EPUBBookLoader(BaseBookLoader):
                 tagl.append(tag)
                 break
 
-            if fixend in tag.text:
+            if fixend in node_text(tag):
                 find_end = True
-            if fixstart in tag.text:
+            if fixstart in node_text(tag):
                 find_start = True
 
             if find_start:
@@ -321,11 +323,11 @@ class EPUBBookLoader(BaseBookLoader):
         flag = False
         extract_p_list_ori = []
         for p in p_list_ori:
-            if fixstart in p.text:
+            if fixstart in node_text(p):
                 flag = True
             if flag:
                 extract_p_list_ori.append(p)
-            if fixend in p.text:
+            if fixend in node_text(p):
                 break
 
         for t in extract_p_list_ori:
@@ -405,7 +407,7 @@ class EPUBBookLoader(BaseBookLoader):
 
             start_append = False
             for p in p_list:
-                text = p.get_text()
+                text = node_text(p)
                 if fixstart in text or fixend in text or start_append:
                     start_append = True
                     new_p_list.append(p)
@@ -427,13 +429,13 @@ class EPUBBookLoader(BaseBookLoader):
             for p in p_list:
                 if is_test_done:
                     break
-                if not p.text or is_special_text(p.text):
+                if not node_text(p) or is_special_text(node_text(p)):
                     pbar.update(1)
                     continue
 
                 new_p = extract_paragraph(copy(p), self.exclude_translate_tags)
                 if self.single_translate and self.block_size > 0:
-                    p_len = num_tokens_from_text(new_p.text)
+                    p_len = num_tokens_from_text(node_text(new_p))
                     block_len += p_len
                     if block_len > self.block_size:
                         index = self._process_combined_paragraph(
@@ -619,6 +621,7 @@ class EPUBBookLoader(BaseBookLoader):
                 ]
 
                 processed_by_file: dict[str, bytes] = {}
+                failed_chapters: list[str] = []
 
                 with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                     future_meta = {
@@ -634,6 +637,8 @@ class EPUBBookLoader(BaseBookLoader):
                             result = future.result()
                             if result["success"] and result["processed_content"]:
                                 processed_by_file[item.file_name] = result["processed_content"]
+                            else:
+                                failed_chapters.append(f"{item.file_name}: {result.get('error') or 'unknown error'}")
                             chapter_pbar.update(1)
                             chapter_pbar.set_postfix_str(
                                 f"Latest: {item.file_name[:20]}..."
@@ -643,10 +648,13 @@ class EPUBBookLoader(BaseBookLoader):
                                 emit_progress("translate", chapter_current, chapter_total, "chapter")
 
                         except Exception as e:
+                            failed_chapters.append(f"{item.file_name}: {e}")
                             print(f"❌ Error processing {item.file_name}: {e}")
                             chapter_pbar.update(1)
 
                 chapter_pbar.close()
+                if failed_chapters:
+                    raise RuntimeError("EPUB parallel chapter failures: " + "; ".join(failed_chapters))
 
                 # Keep EPUB item insertion deterministic: always add translated document
                 # items in their original book order, regardless of future completion order.

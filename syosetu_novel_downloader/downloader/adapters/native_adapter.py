@@ -9,7 +9,7 @@ from pathlib import Path
 from syosetu import Syosetu
 
 from ..models import BookMeta, Chapter, DownloadOptions, DownloadResult
-from ..utils import detect_site_from_url, emit_progress
+from ..utils import detect_site_from_url, emit_progress, extract_syosetu_novel_id, is_content_txt, sanitize_filename
 from .base import BackendAdapter
 from .native_common import parse_native_volume_txt
 
@@ -35,7 +35,7 @@ class NativeFallbackAdapter(BackendAdapter):
         temp_dir = Path(tempfile.mkdtemp(prefix="_native_job_", dir=options.output_dir))
 
         try:
-            novel_id = options.url.rstrip("/").split("/")[-1]
+            novel_id = extract_syosetu_novel_id(options.url)
             if site == "novel18":
                 book_dir = asyncio.run(
                     _run_native_download(
@@ -132,7 +132,7 @@ async def _run_native_download(
     if part_titles:
         order_file = book_dir / "_parts_order.json"
         order_file.write_text(
-            json.dumps(part_titles, ensure_ascii=False, indent=2),
+            json.dumps([sanitize_filename(title) for title in part_titles], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
@@ -140,7 +140,7 @@ async def _run_native_download(
 
 
 def _iter_volume_txt_files_in_order(book_dir: Path) -> list[Path]:
-    txt_files = [p for p in book_dir.glob("*.txt")]
+    txt_files = [p for p in book_dir.glob("*.txt") if is_content_txt(p)]
 
     order_file = book_dir / "_parts_order.json"
     if not order_file.exists():

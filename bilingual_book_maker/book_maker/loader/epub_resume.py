@@ -8,23 +8,26 @@ from bs4 import BeautifulSoup as bs
 from bs4.element import NavigableString
 from ebooklib import ITEM_DOCUMENT, epub
 
-from .epub_support import collect_translatable_nodes, is_special_text, make_new_book
+from .common import load_resume_entries, save_resume_entries
+from .epub_support import collect_translatable_nodes, is_special_text, make_new_book, node_text
 
 
 def load_resume_state(path: str) -> list[str]:
     try:
-        with open(path, "rb") as file_obj:
-            return pickle.load(file_obj)
-    except Exception as exc:
-        raise Exception("can not load resume file") from exc
+        return load_resume_entries(path, mode="json")
+    except Exception:
+        try:
+            with open(path, "rb") as file_obj:
+                legacy_entries = pickle.load(file_obj)
+            if isinstance(legacy_entries, list):
+                return [str(item) for item in legacy_entries]
+        except Exception as exc:
+            raise Exception("can not load resume file") from exc
+    raise Exception("can not load resume file")
 
 
 def save_resume_state(path: str, entries: list[str]) -> None:
-    try:
-        with open(path, "wb") as file_obj:
-            pickle.dump(entries, file_obj)
-    except Exception as exc:
-        raise Exception("can not save resume file") from exc
+    save_resume_entries(path, entries, mode="json", atomic=True)
 
 
 def save_temp_book(loader) -> None:
@@ -44,7 +47,7 @@ def save_temp_book(loader) -> None:
                     allow_navigable_strings=loader.allow_navigable_strings,
                 )
                 for paragraph in p_list:
-                    if not paragraph.text or is_special_text(paragraph.text):
+                    if not node_text(paragraph) or is_special_text(node_text(paragraph)):
                         continue
                     if index < p_to_save_len:
                         new_paragraph = copy(paragraph)

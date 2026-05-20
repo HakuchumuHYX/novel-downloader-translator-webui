@@ -1,3 +1,4 @@
+import html
 from pathlib import Path
 
 from .base_loader import BaseBookLoader
@@ -114,14 +115,14 @@ class PDFBookLoader(BaseBookLoader):
                     content += (
                         '<div class="original">'
                         + "<p>"
-                        + orig.replace("\n", "<br/>")
+                        + html.escape(orig).replace("\n", "<br/>")
                         + "</p></div>"
                     )
                 if trans:
                     content += (
                         '<div class="translation">'
                         + "<p>"
-                        + trans.replace("\n", "<br/>")
+                        + html.escape(trans).replace("\n", "<br/>")
                         + "</p></div>"
                     )
 

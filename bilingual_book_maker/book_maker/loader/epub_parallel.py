@@ -7,7 +7,7 @@ from bs4.element import NavigableString
 
 from book_maker.utils import num_tokens_from_text
 
-from .epub_support import collect_translatable_nodes, extract_paragraph, is_special_text
+from .epub_support import collect_translatable_nodes, extract_paragraph, is_special_text, node_text
 from .helper import not_trans, shorter_result_link
 
 
@@ -115,7 +115,7 @@ def translate_paragraphs_acc_parallel(
 
         def deal_new(self, paragraph, pending, single_translate):
             self.deal_old(pending, single_translate)
-            translation = self.translate_with_context(paragraph.text)
+            translation = self.translate_with_context(node_text(paragraph))
             loader.helper.insert_trans(
                 paragraph,
                 translation,
@@ -134,12 +134,12 @@ def translate_paragraphs_acc_parallel(
             for tag in temp_p.find_all(excluded):
                 tag.extract()
 
-        if any([not paragraph.text, is_special_text(temp_p.text), not_trans(temp_p.text)]):
+        if any([not node_text(paragraph), is_special_text(node_text(temp_p)), not_trans(node_text(temp_p))]):
             if idx == len(p_list) - 1:
                 chapter_helper.deal_old(wait_p_list, loader.single_translate)
             continue
 
-        length = num_tokens_from_text(temp_p.text)
+        length = num_tokens_from_text(node_text(temp_p))
         if length > send_num:
             chapter_helper.deal_new(paragraph, wait_p_list, loader.single_translate)
             continue
@@ -194,7 +194,7 @@ def process_chapter_parallel(loader, chapter_data):
         else:
             local_index = 0
             for paragraph in p_list:
-                if not paragraph.text or is_special_text(paragraph.text):
+                if not node_text(paragraph) or is_special_text(node_text(paragraph)):
                     continue
 
                 save_index = chapter_start + local_index
@@ -207,7 +207,7 @@ def process_chapter_parallel(loader, chapter_data):
                     translated_text = translate_with_chapter_context(
                         loader,
                         thread_translator,
-                        new_p.text,
+                        node_text(new_p),
                         chapter_context_list,
                         chapter_translated_list,
                     )

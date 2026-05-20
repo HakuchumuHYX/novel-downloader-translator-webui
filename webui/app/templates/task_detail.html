@@ -399,7 +399,10 @@
       const when = a.modified_at || a.created_at || '';
       const li = document.createElement('li');
       const title = document.createElement('div');
-      title.innerHTML = `<strong>${artifactKindText(a.kind)}</strong> ${a.file_name}`;
+      const kind = document.createElement('strong');
+      kind.textContent = artifactKindText(a.kind);
+      title.appendChild(kind);
+      title.appendChild(document.createTextNode(` ${a.file_name}`));
       li.appendChild(title);
 
       const meta = document.createElement('div');

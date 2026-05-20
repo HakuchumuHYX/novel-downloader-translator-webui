@@ -48,6 +48,7 @@ async def lifespan(_: FastAPI):
         running_worker = get_worker()
         if running_worker:
             running_worker.stop()
+            running_worker.join(timeout=cfg.stop_grace_seconds + 2)
         set_worker(None)
         set_app_config(None)
 

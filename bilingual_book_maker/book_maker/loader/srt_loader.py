@@ -29,6 +29,10 @@ class SRTBookLoader(BaseBookLoader):
         parallel_workers=1,
     ) -> None:
         self.srt_name = srt_name
+        default_prompt_config = {
+            "system": "You are a srt subtitle file translator.",
+            "user": "Translate the following subtitle text into {language}, but keep the subtitle number and timeline and newlines unchanged: \n{text}",
+        }
         self.translate_model = create_translator(
             model,
             key,
@@ -36,10 +40,7 @@ class SRTBookLoader(BaseBookLoader):
             model_api_base=model_api_base,
             temperature=temperature,
             source_lang=source_lang,
-            prompt_config={
-                "system": "You are a srt subtitle file translator.",
-                "user": "Translate the following subtitle text into {language}, but keep the subtitle number and timeline and newlines unchanged: \n{text}",
-            },
+            prompt_config=prompt_config or default_prompt_config,
         )
         self.is_test = is_test
         self.p_to_save = []

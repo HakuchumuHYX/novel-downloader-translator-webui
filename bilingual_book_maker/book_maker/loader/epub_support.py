@@ -10,6 +10,14 @@ from ebooklib import epub
 from .helper import is_text_link
 
 
+def node_text(node) -> str:
+    if isinstance(node, NavigableString):
+        return str(node)
+    if hasattr(node, "get_text"):
+        return node.get_text()
+    return str(node or "")
+
+
 def is_special_text(text: str) -> bool:
     return (
         text.isdigit()
@@ -157,7 +165,7 @@ def count_translatable_nodes(
 
     count = 0
     for paragraph in paragraphs:
-        text = paragraph.text if hasattr(paragraph, "text") else str(paragraph)
+        text = node_text(paragraph)
         if not text or is_special_text(text):
             continue
         count += 1

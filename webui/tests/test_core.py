@@ -10,21 +10,49 @@ from app.db import _repair_legacy_settings
 from app.main import create_app
 from app.option_registry import DEFAULT_SETTINGS as REGISTRY_DEFAULT_SETTINGS, ENV_TO_SETTING, SETTING_TO_ENV
 from app.security import decrypt_text, encrypt_text, encryption_configured, sanitize_log
-from app.services.command_builder import build_translator_command
+from app.services.command_builder import build_downloader_command, build_translator_command
 from app.services.cookie_service import cookie_header_from_json_text, infer_site_from_json_text
 from app.services.env_service import export_settings_to_env, import_env_to_settings
 from app.services.preview_service import preview_text_file
-from app.services.settings_service import DEFAULT_SETTINGS, load_settings, merged_settings, save_settings, validate_task_payload
+from app.services.settings_service import DEFAULT_SETTINGS, load_settings, merged_settings, save_settings, validate_task_payload, validate_translation_settings
 from app.services.worker_command_service import classify_worker_error, redact_command
 from app.services.worker_file_service import artifact_kind, resolve_source_file
 from app.services.task_management_service import delete_task_records
 from app.services.task_payload_service import build_task_payload
 from app.task_models import TaskPayload
+from book_maker.loader.epub_resume import load_resume_state, save_resume_state
 from book_maker.loader.epub_support import count_translatable_nodes
 from book_maker.translator.openai_translator import OpenAITranslator
+from book_maker.translator.qwen_translator import QwenTranslator
 from cli_support import build_download_options
+from downloader.utils import extract_syosetu_novel_id, is_content_txt, sanitize_filename
 
 VALID_FERNET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+
+def make_test_config() -> AppConfig:
+    return AppConfig(
+        base_dir=Path("/tmp/webui"),
+        data_dir=Path("/tmp/data"),
+        db_path=Path("/tmp/data/webui.sqlite3"),
+        task_root=Path("/tmp/data/tasks"),
+        upload_root=Path("/tmp/data/uploads"),
+        worker_interval_seconds=1.0,
+        cleanup_days=14,
+        app_env="dev",
+        enforce_secure_defaults=False,
+        basic_auth_user="user",
+        basic_auth_password="pass",
+        secret_key="",
+        require_secret_key=False,
+        process_timeout_seconds=7200,
+        stop_grace_seconds=8,
+        max_upload_bytes=104857600,
+        downloader_python="python",
+        downloader_entry=Path("/tmp/downloader.py"),
+        translator_python="python",
+        translator_entry=Path("/tmp/bookmaker"),
+    )
 
 
 def test_settings_override_priority():
@@ -72,6 +100,19 @@ def test_validate_upload_requires_file():
     }
     result = validate_task_payload(payload)
     assert result.ok is False
+
+
+def test_validate_translation_settings_rejects_bad_numbers():
+    settings = dict(DEFAULT_SETTINGS)
+    settings["process_timeout"] = "ten"
+    result = validate_translation_settings(settings)
+    assert result.ok is False
+    assert "process_timeout" in result.message
+
+    settings["process_timeout"] = "59"
+    result = validate_translation_settings(settings)
+    assert result.ok is False
+    assert ">= 60" in result.message
 
 
 def test_log_sanitize():
@@ -136,6 +177,30 @@ def test_cookie_json_parse_and_infer_site():
     assert infer_site_from_json_text(raw) == "kakuyomu"
 
 
+def test_build_download_options_uses_cookie_env_fallback(monkeypatch):
+    monkeypatch.setenv("DOWNLOADER_COOKIE", "ses=from-env")
+    args = argparse.Namespace(
+        url="https://novel18.syosetu.com/n2954di/",
+        site="auto",
+        backend="native",
+        proxy="",
+        output_dir="/tmp/downloads",
+        save_format="txt",
+        record_chapter_number=False,
+        merge_all=False,
+        merged_name="",
+        cookie="",
+        cookie_file="",
+        paid_policy="skip",
+        rate_limit=1.0,
+        retries=3,
+        timeout=60,
+    )
+
+    options = build_download_options(args)
+    assert options.cookie == "ses=from-env"
+
+
 def test_import_env_settings_uses_current_keys():
     raw = """
     BBM_MODEL=openai
@@ -182,6 +247,15 @@ def test_normalize_translator_entry_accepts_legacy_script_path():
     project_root = Path("/opt/translator_webui")
     normalized = _normalize_translator_entry("/app/bilingual_book_maker/make_book.py", project_root)
     assert normalized == Path("/app/bilingual_book_maker")
+
+
+def test_downloader_url_and_content_txt_helpers():
+    assert extract_syosetu_novel_id("https://ncode.syosetu.com/n1234ab/1/?p=2") == "n1234ab"
+    assert extract_syosetu_novel_id("https://ncode.syosetu.com/n1234ab/?p=2") == "n1234ab"
+    assert is_content_txt("001.txt") is True
+    assert is_content_txt("README.txt") is False
+    assert is_content_txt("metadata.txt") is False
+    assert sanitize_filename("a/b:c<d>") == "a_b_c_d_"
 
 
 def test_repair_legacy_parallel_workers_default():
@@ -234,6 +308,7 @@ def test_build_translator_command_uses_prompt_and_resume():
         require_secret_key=False,
         process_timeout_seconds=7200,
         stop_grace_seconds=8,
+        max_upload_bytes=104857600,
         downloader_python="python",
         downloader_entry=Path("/tmp/downloader.py"),
         translator_python="python",
@@ -251,7 +326,7 @@ def test_build_translator_command_uses_prompt_and_resume():
     settings["resume"] = "true"
     settings["model_list"] = ""
 
-    command = build_translator_command(
+    command, extra_env = build_translator_command(
         cfg,
         Path("/tmp/book.txt"),
         payload,
@@ -259,6 +334,7 @@ def test_build_translator_command_uses_prompt_and_resume():
         force_resume=False,
         has_resume_state=True,
     )
+    assert extra_env == {}
     assert "--prompt" in command
     assert "--resume" in command
     assert "--use_context" in command
@@ -267,6 +343,37 @@ def test_build_translator_command_uses_prompt_and_resume():
     assert command[:3] == ["python", "-m", "book_maker"]
     assert "--model_list" in command
     assert "gpt-5.2" in command
+
+
+def test_build_translator_command_puts_secret_settings_in_env():
+    command, extra_env = build_translator_command(
+        make_test_config(),
+        Path("/tmp/book.txt"),
+        TaskPayload(),
+        {**DEFAULT_SETTINGS, "model": "openai", "openai_key": "sk-test-secret"},
+    )
+
+    assert "--openai_key" not in command
+    assert "sk-test-secret" not in command
+    assert extra_env == {"BBM_OPENAI_API_KEY": "sk-test-secret"}
+
+
+def test_build_downloader_command_puts_cookie_in_env():
+    command, _, extra_env = build_downloader_command(
+        make_test_config(),
+        TaskPayload(
+            mode="download_only",
+            source_type="syosetu",
+            source_input="https://ncode.syosetu.com/n1234ab/1/",
+        ),
+        {},
+        Path("/tmp/downloads"),
+        cookie_header="ses=secret-cookie",
+    )
+
+    assert "--cookie" not in command
+    assert "ses=secret-cookie" not in command
+    assert extra_env == {"DOWNLOADER_COOKIE": "ses=secret-cookie"}
 
 
 def test_build_translator_command_skips_default_openai_model_list_for_other_models():
@@ -286,6 +393,7 @@ def test_build_translator_command_skips_default_openai_model_list_for_other_mode
         require_secret_key=False,
         process_timeout_seconds=7200,
         stop_grace_seconds=8,
+        max_upload_bytes=104857600,
         downloader_python="python",
         downloader_entry=Path("/tmp/downloader.py"),
         translator_python="python",
@@ -299,12 +407,13 @@ def test_build_translator_command_skips_default_openai_model_list_for_other_mode
     settings["model"] = "groq"
     settings["model_list"] = ""
 
-    command = build_translator_command(
+    command, extra_env = build_translator_command(
         cfg,
         Path("/tmp/book.txt"),
         payload,
         settings,
     )
+    assert extra_env == {}
     assert "--model_list" not in command
 
 
@@ -378,6 +487,22 @@ def test_openai_translator_model_list_sets_immediate_model():
     translator.set_model_list(["deepseek-ai/DeepSeek-V3.2", "gpt-5.2"])
     assert translator._model_list_values == ["deepseek-ai/DeepSeek-V3.2", "gpt-5.2"]
     assert translator.model == "deepseek-ai/DeepSeek-V3.2"
+
+
+def test_qwen_translator_model_setter_returns_selected_model():
+    translator = QwenTranslator("test-key", "chinese", model="qwen-mt-plus")
+    assert translator.model == "qwen-mt-plus"
+    assert translator.set_qwen_model("bad-model") == "qwen-mt-turbo"
+
+
+def test_epub_resume_state_round_trips_json(tmp_path: Path):
+    path = tmp_path / ".book.temp.bin"
+    save_resume_state(str(path), ["one", "two"])
+
+    saved = path.read_text(encoding="utf-8")
+    assert load_resume_state(str(path)) == ["one", "two"]
+    assert '"version": 2' in saved
+    assert '"p_to_save"' in saved
 
 
 def test_import_env_unescapes_newlines():

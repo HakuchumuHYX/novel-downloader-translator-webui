@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 from asyncio import as_completed, create_task
@@ -7,6 +8,8 @@ from collections.abc import Awaitable, Callable, Iterable
 from typing import TypeVar
 
 import aiofiles
+
+from downloader.utils import sanitize_filename
 
 
 DEFAULT_HEADERS = {
@@ -18,7 +21,7 @@ ResultT = TypeVar("ResultT")
 
 
 def prepare_output_dir(output_dir: str, title: str) -> str:
-    path = os.path.join(output_dir, title)
+    path = os.path.join(output_dir, sanitize_filename(title))
     if os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
@@ -46,9 +49,16 @@ async def collect_results(
 
     tasks = [create_task(awaitable) for awaitable in awaitables]
     results: list[ResultT] = []
-    for task in as_completed(tasks):
-        results.append(await task)
-        completed += 1
-        if progress_callback:
-            progress_callback(completed, total)
+    try:
+        for task in as_completed(tasks):
+            results.append(await task)
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     return results
