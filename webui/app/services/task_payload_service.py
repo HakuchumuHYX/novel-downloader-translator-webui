@@ -8,6 +8,10 @@ from ..option_registry import normalize_parallel_workers, parse_bool
 from ..task_models import TaskPayload
 
 
+def preview_limit_help_text() -> str:
+    return "预览数量单位：TXT=行，MD=行，SRT=行，PDF=行，EPUB=段。"
+
+
 def _optional_positive_int(value: Any, field_name: str) -> int | None:
     text = str(value or "").strip()
     if not text or text == "0":
@@ -21,13 +25,30 @@ def _optional_positive_int(value: Any, field_name: str) -> int | None:
     return number
 
 
+def _form_value(form: Any, key: str, default: Any = "") -> Any:
+    if hasattr(form, "getlist"):
+        values = [item for item in form.getlist(key) if not isinstance(item, UploadFile)]
+        if values:
+            return values[-1]
+    return form.get(key, default)
+
+
+def _non_empty_form_value(form: Any, key: str, default: Any = "") -> Any:
+    value = _form_value(form, key, default)
+    if str(value or "").strip() == "":
+        return default
+    return value
+
+
 def build_task_payload(form: Any, template_payload: dict[str, Any], upload_path: str) -> TaskPayload:
     settings_overrides: dict[str, str] = dict(template_payload.get("settings_overrides", {}))
     for key, value in form.items():
         if isinstance(value, UploadFile):
             continue
         if key.startswith("override__"):
-            settings_overrides[key.replace("override__", "", 1)] = str(value).strip()
+            text = str(value).strip()
+            if text != "":
+                settings_overrides[key.replace("override__", "", 1)] = text
 
     parallel_workers_override = settings_overrides.get("parallel_workers", "")
     if parallel_workers_override:
@@ -37,29 +58,33 @@ def build_task_payload(form: Any, template_payload: dict[str, Any], upload_path:
 
     payload = TaskPayload.model_validate(
         {
-            "mode": str(form.get("mode", template_payload.get("mode", "download_and_translate"))).strip(),
-            "source_type": str(form.get("source_type", template_payload.get("source_type", "upload"))).strip(),
-            "source_input": str(form.get("source_input", template_payload.get("source_input", ""))).strip(),
+            "mode": str(_non_empty_form_value(form, "mode", template_payload.get("mode", "download_and_translate"))).strip(),
+            "source_type": str(_non_empty_form_value(form, "source_type", template_payload.get("source_type", "upload"))).strip(),
+            "source_input": str(_non_empty_form_value(form, "source_input", template_payload.get("source_input", ""))).strip(),
             "upload_path": upload_path or template_payload.get("upload_path", ""),
             "cookie_profile_id": _optional_positive_int(
-                form.get("cookie_profile_id", template_payload.get("cookie_profile_id", "0")),
+                _form_value(form, "cookie_profile_id", template_payload.get("cookie_profile_id", "0")),
                 "cookie_profile_id",
             ),
-            "backend": str(form.get("backend", template_payload.get("backend", "auto"))).strip(),
-            "paid_policy": str(form.get("paid_policy", template_payload.get("paid_policy", "skip"))).strip(),
-            "save_format": str(form.get("save_format", template_payload.get("save_format", "txt"))).strip(),
-            "merge_all": parse_bool(form.get("merge_all", template_payload.get("merge_all", "true")), default=True),
-            "merged_name": str(form.get("merged_name", template_payload.get("merged_name", ""))).strip(),
+            "backend": str(_non_empty_form_value(form, "backend", template_payload.get("backend", "auto"))).strip(),
+            "paid_policy": str(_non_empty_form_value(form, "paid_policy", template_payload.get("paid_policy", "skip"))).strip(),
+            "save_format": str(_non_empty_form_value(form, "save_format", template_payload.get("save_format", "txt"))).strip(),
+            "merge_all": parse_bool(_form_value(form, "merge_all", template_payload.get("merge_all", "true")), default=True),
+            "merged_name": str(_non_empty_form_value(form, "merged_name", template_payload.get("merged_name", ""))).strip(),
             "record_chapter_number": parse_bool(
-                form.get("record_chapter_number", template_payload.get("record_chapter_number", "false")),
+                _form_value(form, "record_chapter_number", template_payload.get("record_chapter_number", "false")),
                 default=False,
             ),
-            "translate_mode": str(form.get("translate_mode", template_payload.get("translate_mode", "preview"))).strip(),
+            "translate_mode": str(_non_empty_form_value(form, "translate_mode", template_payload.get("translate_mode", "preview"))).strip(),
             "translation_output_mode": str(
-                form.get("translation_output_mode", template_payload.get("translation_output_mode", "translated_only"))
+                _non_empty_form_value(
+                    form,
+                    "translation_output_mode",
+                    template_payload.get("translation_output_mode", "translated_only"),
+                )
             ).strip(),
-            "test_num": str(form.get("test_num", template_payload.get("test_num", "80"))).strip(),
-            "process_timeout": str(form.get("process_timeout", template_payload.get("process_timeout", ""))).strip(),
+            "test_num": str(_non_empty_form_value(form, "test_num", template_payload.get("test_num", "80"))).strip(),
+            "process_timeout": str(_non_empty_form_value(form, "process_timeout", template_payload.get("process_timeout", ""))).strip(),
             "settings_overrides": settings_overrides,
         }
     )

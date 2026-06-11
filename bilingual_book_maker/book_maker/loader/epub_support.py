@@ -14,6 +14,8 @@ def node_text(node) -> str:
     if isinstance(node, NavigableString):
         return str(node)
     if hasattr(node, "get_text"):
+        if hasattr(node, "find") and node.find("br") is not None:
+            return node.get_text("\n")
         return node.get_text()
     return str(node or "")
 

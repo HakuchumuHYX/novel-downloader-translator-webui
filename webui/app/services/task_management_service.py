@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from ..config import AppConfig
+from ..option_registry import SECRET_SETTING_KEYS
 from ..time_utils import format_local_timestamp
 from .preview_service import preview_epub_file, preview_pdf_file, preview_text_file
 from .task_service import (
@@ -21,9 +23,43 @@ from .task_service import (
 )
 
 
+def sanitize_task_payload_for_api(raw_payload: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw_payload or "{}")
+    except Exception:
+        return {}
+
+    return sanitize_task_payload_dict_for_api(payload)
+
+
+def sanitize_task_payload_dict_for_api(payload: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(payload or {})
+    overrides = sanitized.get("settings_overrides")
+    if isinstance(overrides, dict):
+        sanitized["settings_overrides"] = {
+            key: ("***" if key in SECRET_SETTING_KEYS and str(value or "") else value)
+            for key, value in overrides.items()
+        }
+    return sanitized
+
+
+def strip_secret_overrides_for_template(payload: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(payload or {})
+    overrides = cleaned.get("settings_overrides")
+    if isinstance(overrides, dict):
+        cleaned["settings_overrides"] = {
+            key: value for key, value in overrides.items() if key not in SECRET_SETTING_KEYS
+        }
+    return cleaned
+
+
 def row_to_dict(row: Any) -> dict[str, Any]:
     data = {key: row[key] for key in row.keys()}
     for key, value in list(data.items()):
+        if key == "payload_json":
+            data["payload"] = sanitize_task_payload_for_api(str(value or ""))
+            del data[key]
+            continue
         if key.endswith("_at"):
             data[key] = format_local_timestamp(value)
     return data
@@ -43,12 +79,27 @@ def can_manage_task(status: str, force: bool) -> tuple[bool, str]:
 
 def safe_path(path_str: str, cfg: AppConfig) -> Path:
     path = Path(path_str).resolve()
-    data_root = cfg.data_dir.resolve()
-    try:
-        path.relative_to(data_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid path") from exc
-    return path
+    allowed_roots = (cfg.data_dir.resolve(), cfg.task_root.resolve(), cfg.upload_root.resolve())
+    for root in allowed_roots:
+        try:
+            path.relative_to(root)
+            return path
+        except ValueError:
+            continue
+    raise HTTPException(status_code=400, detail="Invalid path")
+
+
+def validate_retry_source_available(payload: dict[str, Any]) -> None:
+    if str(payload.get("source_type", "")).strip() != "upload":
+        return
+    upload_path = str(payload.get("upload_path", "")).strip()
+    if not upload_path:
+        return
+    if not Path(upload_path).exists():
+        raise HTTPException(
+            status_code=409,
+            detail="Uploaded file is missing; create a new upload task",
+        )
 
 
 def safe_task_file_path(task_id: int, path_str: str, cfg: AppConfig) -> Path:
@@ -107,6 +158,12 @@ def safe_delete_upload_file(path_str: str, cfg: AppConfig) -> bool:
     if not target.exists() or not target.is_file():
         return False
     target.unlink(missing_ok=True)
+    stem = target.stem
+    for extra in (
+        target.with_name(f".{stem}.temp.bin"),
+        target.with_name(f"{stem}_翻译_temp{target.suffix}"),
+    ):
+        extra.unlink(missing_ok=True)
     return True
 
 
@@ -175,6 +232,8 @@ def delete_task_records(
         delete_order.sort(reverse=True)
         delete_order.append(task_id)
     else:
+        if list_task_descendants(conn, task_id):
+            raise HTTPException(status_code=409, detail="has child tasks (use cascade=true)")
         delete_order = [task_id]
 
     deleted_ids: list[int] = []

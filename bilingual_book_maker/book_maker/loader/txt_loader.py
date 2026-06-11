@@ -1,10 +1,74 @@
+import hashlib
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 from .base_loader import BaseBookLoader
-from .common import create_translator, emit_progress, load_resume_entries, save_resume_entries, save_text_output
+from .common import (
+    create_translator,
+    emit_progress,
+    load_resume_state_with_metadata,
+    save_resume_entries,
+    save_text_output,
+)
+
+
+@dataclass(frozen=True)
+class TextBatch:
+    index: int
+    text: str
+    translatable: bool = True
+
+
+def _build_natural_chunks(lines: list[str]) -> list[str]:
+    chunks: list[str] = []
+    current: list[str] = []
+    blank_run: list[str] = []
+
+    def flush_current() -> None:
+        nonlocal current
+        if current:
+            chunks.append("\n".join(current).rstrip())
+            current = []
+
+    def flush_blank_run() -> None:
+        nonlocal blank_run
+        if blank_run:
+            chunks.append("\n".join(blank_run))
+            blank_run = []
+
+    for line in lines:
+        starts_chapter = line.startswith("● ")
+        blank = line.strip() == ""
+
+        if starts_chapter:
+            flush_current()
+            flush_blank_run()
+            current = [line]
+            continue
+
+        if blank:
+            blank_run.append(line)
+            continue
+
+        if blank_run:
+            if len(blank_run) > 1:
+                flush_current()
+                flush_blank_run()
+                current = [line]
+            else:
+                flush_current()
+                current = blank_run + [line]
+                blank_run = []
+            continue
+
+        current.append(line)
+
+    flush_current()
+    flush_blank_run()
+    return [chunk for chunk in chunks if chunk != ""]
 
 
 class TXTBookLoader(BaseBookLoader):
@@ -27,6 +91,13 @@ class TXTBookLoader(BaseBookLoader):
         parallel_workers=1,
     ) -> None:
         self.txt_name = txt_name
+        try:
+            self.parallel_workers = max(1, int(parallel_workers or 1))
+        except Exception:
+            self.parallel_workers = 1
+        self.context_enabled = bool(context_flag) and self.parallel_workers <= 1
+        if context_flag and not self.context_enabled:
+            print("warning: TXT context is disabled when parallel_workers > 1")
         self.translate_model = create_translator(
             model,
             key=key,
@@ -35,6 +106,8 @@ class TXTBookLoader(BaseBookLoader):
             prompt_config=prompt_config,
             temperature=temperature,
             source_lang=source_lang,
+            context_flag=self.context_enabled,
+            context_paragraph_limit=context_paragraph_limit,
         )
 
         self.is_test = is_test
@@ -44,7 +117,6 @@ class TXTBookLoader(BaseBookLoader):
         self.test_num = test_num
         self.batch_size = 10
         self.single_translate = single_translate
-        self.parallel_workers = max(1, parallel_workers)
         self._checkpoint_interval_seconds = max(
             0.0,
             float(os.getenv("BBM_TXT_CHECKPOINT_INTERVAL_SECONDS", "2.0")),
@@ -71,17 +143,19 @@ class TXTBookLoader(BaseBookLoader):
     def _make_new_book(self, book):
         pass
 
-    def _build_batches(self) -> list[tuple[int, str]]:
-        batches: list[tuple[int, str]] = []
-        for start in range(0, len(self.origin_book), self.batch_size):
-            if self.is_test and start >= self.test_num:
+    def _build_batches(self) -> list[TextBatch]:
+        batches: list[TextBatch] = []
+        for chunk in _build_natural_chunks(self.origin_book):
+            if self.is_test and len(batches) >= self.test_num:
                 break
-            chunk = self.origin_book[start : start + self.batch_size]
-            batch_text = "\n".join(chunk)
-            if self._is_special_text(batch_text):
+            if self._is_special_text(chunk):
+                batches.append(TextBatch(index=len(batches), text=chunk, translatable=False))
                 continue
-            batches.append((len(batches), batch_text))
+            batches.append(TextBatch(index=len(batches), text=chunk))
         return batches
+
+    def _batch_hashes(self) -> list[str]:
+        return [hashlib.sha256(batch.text.encode("utf-8")).hexdigest() for batch in self._build_batches()]
 
     def _translate_batch(self, batch_text: str) -> str:
         # Keep using the configured loader-level translator instance so that
@@ -121,31 +195,36 @@ class TXTBookLoader(BaseBookLoader):
         batches = self._build_batches()
         total_batches = len(batches)
         self._normalize_saved_progress(total_batches)
+        for batch in batches:
+            if not batch.translatable and self.p_to_save[batch.index] == "":
+                self.p_to_save[batch.index] = batch.text
 
-        completed = 0
-        if self.resume:
-            completed = sum(1 for i in range(total_batches) if self.p_to_save[i] != "")
+        completed = sum(
+            1
+            for batch in batches
+            if not batch.translatable or self.p_to_save[batch.index] != ""
+        )
         emit_progress("translate", completed, total_batches, "batch")
 
         try:
-            pending = [(idx, text) for idx, text in batches if self.p_to_save[idx] == ""]
+            pending = [batch for batch in batches if batch.translatable and self.p_to_save[batch.index] == ""]
 
             if self.parallel_workers <= 1 or len(pending) <= 1:
-                for idx, batch_text in pending:
+                for batch in pending:
                     try:
-                        translated = self._translate_batch(batch_text)
+                        translated = self._translate_batch(batch.text)
                     except Exception as e:
                         print(e)
                         raise Exception("Something is wrong when translate") from e
-                    self.p_to_save[idx] = translated
+                    self.p_to_save[batch.index] = translated
                     completed += 1
                     emit_progress("translate", completed, total_batches, "batch")
                     self._maybe_checkpoint(completed, total_batches)
             else:
                 with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
                     future_map = {
-                        executor.submit(self._translate_batch, batch_text): idx
-                        for idx, batch_text in pending
+                        executor.submit(self._translate_batch, batch.text): batch.index
+                        for batch in pending
                     }
 
                     for future in as_completed(future_map):
@@ -163,11 +242,15 @@ class TXTBookLoader(BaseBookLoader):
             self._maybe_checkpoint(completed, total_batches, force=True)
 
             self.bilingual_result = []
-            for idx, batch_text in batches:
-                translated = self.p_to_save[idx]
-                if not self.single_translate:
-                    self.bilingual_result.append(batch_text)
+            for batch in batches:
+                translated = self.p_to_save[batch.index]
+                if batch.translatable and not self.single_translate:
+                    self.bilingual_result.append(batch.text)
+                    self.bilingual_result.append("")
                 self.bilingual_result.append(translated)
+                self.bilingual_result.append("")
+            while self.bilingual_result and self.bilingual_result[-1] == "":
+                self.bilingual_result.pop()
 
             self.save_file(
                 f"{Path(self.txt_name).parent}/{Path(self.txt_name).stem}_翻译.txt",
@@ -190,11 +273,17 @@ class TXTBookLoader(BaseBookLoader):
     def _save_temp_book(self):
         batches = self._build_batches()
         self.bilingual_temp_result = []
-        for idx, batch_text in batches:
-            if not self.single_translate:
-                self.bilingual_temp_result.append(batch_text)
-            if idx < len(self.p_to_save) and self.p_to_save[idx] != "":
-                self.bilingual_temp_result.append(self.p_to_save[idx])
+        for batch in batches:
+            if batch.translatable and not self.single_translate:
+                self.bilingual_temp_result.append(batch.text)
+                self.bilingual_temp_result.append("")
+            if batch.index < len(self.p_to_save) and (
+                self.p_to_save[batch.index] != "" or not batch.translatable
+            ):
+                self.bilingual_temp_result.append(self.p_to_save[batch.index] if batch.index < len(self.p_to_save) else batch.text)
+                self.bilingual_temp_result.append("")
+        while self.bilingual_temp_result and self.bilingual_temp_result[-1] == "":
+            self.bilingual_temp_result.pop()
 
         self.save_file(
             f"{Path(self.txt_name).parent}/{Path(self.txt_name).stem}_翻译_temp.txt",
@@ -202,10 +291,21 @@ class TXTBookLoader(BaseBookLoader):
         )
 
     def _save_progress(self):
-        save_resume_entries(self.bin_path, self.p_to_save, mode="json", atomic=True)
+        save_resume_entries(
+            self.bin_path,
+            self.p_to_save,
+            mode="json",
+            atomic=True,
+            metadata={"version": 3, "batch_hashes": self._batch_hashes()},
+        )
 
     def load_state(self):
-        self.p_to_save = load_resume_entries(self.bin_path, mode="json")
+        state = load_resume_state_with_metadata(self.bin_path)
+        if state.get("batch_hashes") != self._batch_hashes():
+            print("warning: resume state batch layout changed; ignoring old TXT resume state")
+            self.p_to_save = []
+            return
+        self.p_to_save = [str(item) for item in state.get("p_to_save", [])]
 
     def save_file(self, book_path, content):
         save_text_output(book_path, content)

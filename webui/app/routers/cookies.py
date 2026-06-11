@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from ..db import get_conn
 from ..schemas import CookieJsonParseRequest, CookieProfileUpsertRequest
-from ..security import encrypt_text, encryption_configured, verify_basic_auth
+from ..security import encrypt_text, encryption_configured, verify_basic_auth, verify_fetch_request
 from ..services.cookie_service import (
     cookie_header_from_json_text,
     cookie_pairs_from_json_text,
@@ -18,14 +18,31 @@ from ..services.task_service import (
     create_or_update_cookie_profile,
     delete_cookie_profile,
     detach_cookie_profile_from_non_running_tasks,
+    get_cookie_profile_for_edit,
 )
 
 
 router = APIRouter()
 
 
+@router.get("/api/cookies/{profile_id}")
+def api_get_cookie_profile(
+    profile_id: int,
+    _: str = Depends(verify_basic_auth),
+) -> JSONResponse:
+    with get_conn() as conn:
+        profile = get_cookie_profile_for_edit(conn, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="cookie profile not found")
+    return JSONResponse(profile)
+
+
 @router.post("/api/cookies/parse-json")
-async def api_parse_cookie_json(request: Request, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+async def api_parse_cookie_json(
+    request: Request,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     raw_text = ""
     if request.headers.get("content-type", "").startswith("application/json"):
         body = await request.json()
@@ -60,7 +77,11 @@ async def api_parse_cookie_json(request: Request, _: str = Depends(verify_basic_
 
 
 @router.post("/api/cookies")
-async def api_create_cookie_profile(request: Request, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+async def api_create_cookie_profile(
+    request: Request,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     inferred_site = ""
 
     if request.headers.get("content-type", "").startswith("application/json"):
@@ -132,6 +153,7 @@ def api_delete_cookie_profile(
     profile_id: int,
     force: bool = Query(default=False),
     _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
 ) -> JSONResponse:
     with get_conn() as conn:
         total_refs, running_refs = count_cookie_profile_task_refs(conn, profile_id)

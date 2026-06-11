@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from ..db import get_conn
-from ..option_registry import SOURCE_TYPES
+from ..option_registry import DOWNLOADER_BACKENDS, PAID_POLICIES, SAVE_FORMATS, SOURCE_TYPES
 from ..runtime import get_app_config
 from ..security import encryption_configured, verify_basic_auth
-from ..services.settings_service import load_settings, mask_for_display
-from ..services.task_payload_service import task_parallel_workers
+from ..services.settings_service import load_settings, mask_for_display, supported_model_names
+from ..services.task_payload_service import preview_limit_help_text, task_parallel_workers
 from ..services.task_service import (
     count_tasks,
     get_task,
@@ -65,6 +65,7 @@ def new_task_page(request: Request, _: str = Depends(verify_basic_auth)) -> HTML
             "cookie_profiles": cookie_profiles,
             "templates": templates_list,
             "source_types": sorted(SOURCE_TYPES),
+            "preview_limit_help": preview_limit_help_text(),
         },
     )
 
@@ -135,6 +136,10 @@ def settings_page(request: Request, _: str = Depends(verify_basic_auth)) -> HTML
             "settings": mask_for_display(settings),
             "cookie_profiles": cookie_profiles,
             "templates": templates_list,
+            "model_options": sorted(supported_model_names()),
+            "backend_options": sorted(DOWNLOADER_BACKENDS),
+            "paid_policy_options": sorted(PAID_POLICIES),
+            "save_format_options": sorted(SAVE_FORMATS),
             "encryption_configured": encryption_configured(),
             "secret_key_required": get_app_config().require_secret_key,
         },

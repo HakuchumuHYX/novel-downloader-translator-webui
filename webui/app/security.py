@@ -5,7 +5,7 @@ import re
 from typing import Optional
 
 from cryptography.fernet import Fernet
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from .config import get_config
@@ -57,6 +57,14 @@ def verify_basic_auth(credentials: HTTPBasicCredentials = Depends(security)) -> 
             headers={"WWW-Authenticate": "Basic"},
         )
     return credentials.username
+
+
+def verify_fetch_request(request: Request) -> None:
+    if request.headers.get("x-requested-with", "").strip().lower() != "fetch":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Mutating requests must include X-Requested-With: fetch",
+        )
 
 
 _LOG_PATTERNS = [

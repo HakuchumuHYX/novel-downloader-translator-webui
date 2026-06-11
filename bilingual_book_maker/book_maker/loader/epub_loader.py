@@ -33,7 +33,7 @@ from .epub_support import (
     node_text,
     should_translate_item,
 )
-from .helper import EPUBBookLoaderHelper, not_trans
+from .helper import EPUBBookLoaderHelper, not_trans, shorter_result_link
 
 
 class EPUBBookLoader(BaseBookLoader):
@@ -93,6 +93,12 @@ class EPUBBookLoader(BaseBookLoader):
         self.enable_parallel = False
         self._progress_lock = Lock()
         self._translation_index = 0
+        self._checkpoint_interval_seconds = max(
+            0.0,
+            float(os.getenv("BBM_EPUB_CHECKPOINT_INTERVAL_SECONDS", "2.0")),
+        )
+        self._last_checkpoint_ts = 0.0
+        self._last_checkpoint_index = -1
         self.set_parallel_workers(parallel_workers)
 
         install_epub_compat_patches()
@@ -146,13 +152,7 @@ class EPUBBookLoader(BaseBookLoader):
             )
         index += 1
 
-        if thread_safe:
-            with self._progress_lock:
-                if index % 20 == 0:
-                    self._save_progress()
-        else:
-            if index % 20 == 0:
-                self._save_progress()
+        self._maybe_checkpoint(index, thread_safe=thread_safe)
         return index
 
     def _process_combined_paragraph(
@@ -175,6 +175,7 @@ class EPUBBookLoader(BaseBookLoader):
         if len(text) > 0:
             translated_text = self.translate_model.translate("\n".join(text))
             translated_text = translated_text.split("\n")
+            self._set_accumulated_saved_values(index - len(p_block), translated_text[: len(p_block)])
             text_len = len(translated_text)
 
             for i in range(text_len):
@@ -196,16 +197,19 @@ class EPUBBookLoader(BaseBookLoader):
                         p, p.string, self.translation_style, self.single_translate
                     )
 
-        if thread_safe:
-            with self._progress_lock:
-                self._save_progress()
-        else:
-            self._save_progress()
+        self._maybe_checkpoint(index, force=True, thread_safe=thread_safe)
         return index
 
-    def translate_paragraphs_acc(self, p_list, send_num):
+    def translate_paragraphs_acc(self, p_list, send_num, start_index=0, p_to_save_len=0):
         count = 0
+        current_index = start_index
         wait_p_list = []
+
+        def flush_wait() -> None:
+            nonlocal count
+            self._translate_accumulated_wait_list(wait_p_list)
+            count = 0
+
         for i in range(len(p_list)):
             p = p_list[i]
             print(f"translating {i}/{len(p_list)}")
@@ -221,27 +225,34 @@ class EPUBBookLoader(BaseBookLoader):
             if any(
                 [not node_text(p), is_special_text(node_text(temp_p)), not_trans(node_text(temp_p))]
             ):
-                if i == len(p_list) - 1:
-                    self.helper.deal_old(wait_p_list, self.single_translate)
                 continue
+
+            if self.resume and current_index < p_to_save_len:
+                self._apply_accumulated_results([(current_index, p)], [self.p_to_save[current_index]])
+                current_index += 1
+                continue
+
             length = num_tokens_from_text(node_text(temp_p))
             if length > send_num:
-                self.helper.deal_new(p, wait_p_list, self.single_translate)
+                flush_wait()
+                translated = self.helper.translate_with_backoff(p.text, self.helper.context_flag)
+                self._apply_accumulated_results([(current_index, p)], [translated])
+                current_index += 1
                 continue
-            if i == len(p_list) - 1:
-                if count + length < send_num:
-                    wait_p_list.append(p)
-                    self.helper.deal_old(wait_p_list, self.single_translate)
-                else:
-                    self.helper.deal_new(p, wait_p_list, self.single_translate)
-                break
-            if count + length < send_num:
+
+            if count + length < send_num or not wait_p_list:
+                wait_p_list.append((current_index, p))
                 count += length
-                wait_p_list.append(p)
-            else:
-                self.helper.deal_old(wait_p_list, self.single_translate)
-                wait_p_list.append(p)
-                count = length
+                current_index += 1
+                continue
+
+            flush_wait()
+            wait_p_list.append((current_index, p))
+            count = length
+            current_index += 1
+
+        flush_wait()
+        return current_index
 
     def get_item(self, book, name):
         for item in book.get_items():
@@ -373,6 +384,50 @@ class EPUBBookLoader(BaseBookLoader):
             self.p_to_save.extend([""] * (index - len(self.p_to_save) + 1))
         self.p_to_save[index] = value
 
+    def _set_accumulated_saved_values(self, start_index: int, values: list[str]) -> None:
+        for offset, value in enumerate(values):
+            self._set_saved_value(start_index + offset, str(value))
+
+    def _apply_accumulated_results(self, indexed_nodes, translated_values) -> None:
+        for offset, (save_index, node) in enumerate(indexed_nodes):
+            if offset >= len(translated_values):
+                break
+            text = shorter_result_link(str(translated_values[offset]))
+            self._set_saved_value(int(save_index), text)
+            self.helper.insert_trans(
+                node,
+                text,
+                self.translation_style,
+                self.single_translate,
+            )
+
+    def _translate_accumulated_wait_list(self, indexed_wait_list) -> None:
+        if not indexed_wait_list:
+            return
+        nodes = [node for _, node in indexed_wait_list]
+        result_txt_list = self.translate_model.translate_list(nodes)
+        self._apply_accumulated_results(indexed_wait_list, result_txt_list)
+        indexed_wait_list.clear()
+
+    def _maybe_checkpoint(self, index: int, *, force: bool = False, thread_safe: bool = False) -> None:
+        now = time.monotonic()
+        if not force and self._checkpoint_interval_seconds > 0:
+            if index == self._last_checkpoint_index:
+                return
+            if (now - self._last_checkpoint_ts) < self._checkpoint_interval_seconds:
+                return
+
+        def _save() -> None:
+            self._save_progress()
+            self._last_checkpoint_ts = now
+            self._last_checkpoint_index = index
+
+        if thread_safe:
+            with self._progress_lock:
+                _save()
+            return
+        _save()
+
     def process_item(
         self,
         item,
@@ -421,7 +476,12 @@ class EPUBBookLoader(BaseBookLoader):
 
             print("------------------------------------------------------")
             print(f"dealing {item.file_name} ...")
-            self.translate_paragraphs_acc(p_list, send_num)
+            index = self.translate_paragraphs_acc(
+                p_list,
+                send_num,
+                start_index=index,
+                p_to_save_len=p_to_save_len,
+            )
         else:
             is_test_done = self.is_test and index > self.test_num
             p_block = []
@@ -692,10 +752,9 @@ class EPUBBookLoader(BaseBookLoader):
                 pbar.close()
         except KeyboardInterrupt as e:
             print(e)
-            if self.accumulated_num == 1:
-                print("you can resume it next time")
-                self._save_progress()
-                self._save_temp_book()
+            print("you can resume it next time")
+            self._save_progress()
+            self._save_temp_book()
             raise
         except Exception:
             traceback.print_exc()

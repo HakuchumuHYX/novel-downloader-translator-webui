@@ -7,7 +7,7 @@
     <p>集中管理模型、提示词、Cookie 与运行参数。这里的默认值会被后续任务继承，单任务仍可按需覆盖。</p>
   </div>
   <div class="actions">
-    <a class="btn" href="/api/settings/export-env">导出 .env</a>
+    <button class="btn" type="button" onclick="confirmExportEnv()">导出 .env</button>
     <a class="btn" href="/tasks/new">创建任务</a>
   </div>
 </section>
@@ -51,15 +51,25 @@
     <label>上传 .env 文件 <input type="file" name="env_file" accept=".env,.txt"></label>
     <label>或粘贴 env 文本 <textarea name="env_text" rows="5"></textarea></label>
     <button class="btn" type="submit">导入到设置</button>
-    <a class="btn" href="/api/settings/export-env">下载导出的 .env</a>
+    <button class="btn" type="button" onclick="confirmExportEnv()">下载导出的 .env</button>
   </form>
+  <p class="hint">未在数据库中保存的普通设置会读取同名 BBM_* 环境变量作为默认层；数据库保存值优先。</p>
 </section>
 
 <form id="settings-form" method="post" action="/api/settings" class="section-stack">
   <section class="panel">
     <h2>翻译后端</h2>
     <div class="field-grid">
-      <label>模型（model） <input type="text" name="model" value="{{ settings.model }}"></label>
+      <label>模型（model）
+        <select name="model">
+          {% if settings.model not in model_options %}
+          <option value="{{ settings.model }}" selected>{{ settings.model }}（当前未注册）</option>
+          {% endif %}
+          {% for model in model_options %}
+          <option value="{{ model }}" {% if settings.model == model %}selected{% endif %}>{{ model }}</option>
+          {% endfor %}
+        </select>
+      </label>
       <label>模型列表（model_list） <input type="text" name="model_list" value="{{ settings.model_list }}" placeholder="openai 留空时默认 gpt-5.2"></label>
       <label>接口地址（api_base） <input type="text" name="api_base" value="{{ settings.api_base }}"></label>
       <label>目标语言（language） <input type="text" name="language" value="{{ settings.language }}"></label>
@@ -71,10 +81,12 @@
 
   <section class="panel">
     <h2>提示词</h2>
+    <button class="btn" type="button" onclick="applyNovelPromptPreset()">填入小说翻译预设</button>
     <label>提示词文件（prompt_file） <input type="text" name="prompt_file" value="{{ settings.prompt_file }}"></label>
     <label>内联提示词（prompt_text） <textarea name="prompt_text" rows="4">{{ settings.prompt_text }}</textarea></label>
     <label>系统提示词（prompt_system） <textarea name="prompt_system" rows="3">{{ settings.prompt_system }}</textarea></label>
     <label>用户提示词（prompt_user） <textarea name="prompt_user" rows="4">{{ settings.prompt_user }}</textarea></label>
+    <label>术语表（glossary，每行 原词=译名） <textarea name="glossary" rows="5">{{ settings.glossary }}</textarea></label>
     <p class="hint">优先级：prompt_file &gt; prompt_text &gt; (prompt_system + prompt_user)。使用 system/user 时，user 中需包含
       {text}。</p>
   </section>
@@ -82,15 +94,18 @@
   <section class="panel">
     <h2>运行参数</h2>
     <div class="field-grid">
-      <label>测试模式（test） <input type="text" name="test" value="{{ settings.test }}"></label>
+      <input type="hidden" name="test" value="false">
+      <label class="checkbox"><input type="checkbox" name="test" value="true" {% if settings.test|lower in ['1', 'true', 'yes', 'on'] %}checked{% endif %}> 测试模式（test）</label>
       <label>测试条数（test_num） <input type="text" name="test_num" value="{{ settings.test_num }}"></label>
-      <label>断点续跑（resume） <input type="text" name="resume" value="{{ settings.resume }}"></label>
+      <input type="hidden" name="resume" value="false">
+      <label class="checkbox"><input type="checkbox" name="resume" value="true" {% if settings.resume|lower in ['1', 'true', 'yes', 'on'] %}checked{% endif %}> 断点续跑（resume）</label>
       <label>累计段数（accumulated_num） <input type="text" name="accumulated_num"
           value="{{ settings.accumulated_num }}"></label>
       <label>最大并发线程数（parallel_workers）
         <input type="text" name="parallel_workers" value="{{ settings.parallel_workers }}">
       </label>
-      <label>上下文模式（use_context） <input type="text" name="use_context" value="{{ settings.use_context }}"></label>
+      <input type="hidden" name="use_context" value="false">
+      <label class="checkbox"><input type="checkbox" name="use_context" value="true" {% if settings.use_context|lower in ['1', 'true', 'yes', 'on'] %}checked{% endif %}> 上下文模式（use_context）</label>
       <label>上下文段落上限（context_paragraph_limit） <input type="text" name="context_paragraph_limit"
           value="{{ settings.context_paragraph_limit }}"></label>
       <label>分块大小（block_size） <input type="text" name="block_size" value="{{ settings.block_size }}"></label>
@@ -100,8 +115,8 @@
       <label>翻译标签（translate_tags） <input type="text" name="translate_tags" value="{{ settings.translate_tags }}"></label>
       <label>排除标签（exclude_translate_tags） <input type="text" name="exclude_translate_tags"
           value="{{ settings.exclude_translate_tags }}"></label>
-      <label>允许导航字符串（allow_navigable_strings） <input type="text" name="allow_navigable_strings"
-          value="{{ settings.allow_navigable_strings }}"></label>
+      <input type="hidden" name="allow_navigable_strings" value="false">
+      <label class="checkbox"><input type="checkbox" name="allow_navigable_strings" value="true" {% if settings.allow_navigable_strings|lower in ['1', 'true', 'yes', 'on'] %}checked{% endif %}> 允许导航字符串（allow_navigable_strings）</label>
       <label>请求间隔（interval） <input type="text" name="interval" value="{{ settings.interval }}"></label>
     </div>
     <p class="hint">说明：TXT 翻译时按 batches 并发；EPUB 翻译时按章节（chapters）并发。</p>
@@ -114,13 +129,32 @@
       <label>超时（timeout） <input type="text" name="timeout" value="{{ settings.timeout }}"></label>
       <label>重试次数（retries） <input type="text" name="retries" value="{{ settings.retries }}"></label>
       <label>限速（rate_limit） <input type="text" name="rate_limit" value="{{ settings.rate_limit }}"></label>
-      <label>下载后端（backend） <input type="text" name="backend" value="{{ settings.backend }}"></label>
-      <label>付费章节策略（paid_policy） <input type="text" name="paid_policy" value="{{ settings.paid_policy }}"></label>
-      <label>输出格式（save_format） <input type="text" name="save_format" value="{{ settings.save_format }}"></label>
-      <label>合并输出（merge_all） <input type="text" name="merge_all" value="{{ settings.merge_all }}"></label>
+      <label>下载后端（backend）
+        <select name="backend">
+          {% for item in backend_options %}
+          <option value="{{ item }}" {% if settings.backend == item %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>付费章节策略（paid_policy）
+        <select name="paid_policy">
+          {% for item in paid_policy_options %}
+          <option value="{{ item }}" {% if settings.paid_policy == item %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>输出格式（save_format）
+        <select name="save_format">
+          {% for item in save_format_options %}
+          <option value="{{ item }}" {% if settings.save_format == item %}selected{% endif %}>{{ item }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <input type="hidden" name="merge_all" value="false">
+      <label class="checkbox"><input type="checkbox" name="merge_all" value="true" {% if settings.merge_all|lower in ['1', 'true', 'yes', 'on'] %}checked{% endif %}> 合并输出（merge_all）</label>
       <label>合并文件名（merged_name） <input type="text" name="merged_name" value="{{ settings.merged_name }}"></label>
-      <label>记录章节号（record_chapter_number） <input type="text" name="record_chapter_number"
-          value="{{ settings.record_chapter_number }}"></label>
+      <input type="hidden" name="record_chapter_number" value="false">
+      <label class="checkbox"><input type="checkbox" name="record_chapter_number" value="true" {% if settings.record_chapter_number|lower in ['1', 'true', 'yes', 'on'] %}checked{% endif %}> 记录章节号（record_chapter_number）</label>
       <label>进程总超时（process_timeout） <input type="text" name="process_timeout"
           value="{{ settings.process_timeout }}"></label>
       <label>清理保留天数（cleanup_days） <input type="text" name="cleanup_days" value="{{ settings.cleanup_days }}"></label>
@@ -158,6 +192,7 @@
   <pre id="cookie-parse-result"></pre>
 
   <form id="cookie-form" method="post" action="/api/cookies" enctype="multipart/form-data">
+    <input type="hidden" name="profile_id" value="">
     <label>名称（name） <input type="text" name="name" required></label>
     <label>站点（site） <input type="text" name="site" placeholder="kakuyomu / novel18 / syosetu（可留空自动推断）"></label>
     <label>Cookie 文本（cookie） <textarea name="cookie" rows="3" placeholder="name=value; name2=value2"></textarea></label>
@@ -180,7 +215,10 @@
         <td>{{ c.id }}</td>
         <td>{{ c.name }}</td>
         <td>{{ c.site }}</td>
-        <td><button type="button" data-cookie-id="{{ c.id }}">删除</button></td>
+        <td>
+          <button type="button" data-cookie-edit-id="{{ c.id }}">编辑</button>
+          <button type="button" data-cookie-id="{{ c.id }}">删除</button>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -189,9 +227,9 @@
 
 <section class="panel">
   <h2>任务模板</h2>
-  <ul>
+  <ul id="template-list">
     {% for t in templates %}
-    <li>#{{ t.id }} {{ t.name }}</li>
+    <li>#{{ t.id }} {{ t.name }} <button type="button" data-template-id="{{ t.id }}">删除</button></li>
     {% endfor %}
   </ul>
 </section>
@@ -223,7 +261,11 @@
 
   async function postForm(form, url) {
     try {
-      const resp = await fetch(url, { method: 'POST', body: new FormData(form) });
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'fetch' },
+        body: new FormData(form)
+      });
       const data = await readResponseData(resp);
       setResult(data);
 
@@ -251,7 +293,11 @@
   document.getElementById('cookie-parse-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      const resp = await fetch('/api/cookies/parse-json', { method: 'POST', body: new FormData(e.target) });
+      const resp = await fetch('/api/cookies/parse-json', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'fetch' },
+        body: new FormData(e.target)
+      });
       const data = await readResponseData(resp);
       document.getElementById('cookie-parse-result').textContent = JSON.stringify(data, null, 2);
 
@@ -296,11 +342,26 @@
   });
 
   document.getElementById('cookie-table').addEventListener('click', async (e) => {
+    const editButton = e.target.closest('button[data-cookie-edit-id]');
+    if (editButton) {
+      const editId = editButton.getAttribute('data-cookie-edit-id');
+      if (editId) await editCookie(editId);
+      return;
+    }
+
     const button = e.target.closest('button[data-cookie-id]');
     if (!button) return;
     const id = button.getAttribute('data-cookie-id');
     if (!id) return;
     await deleteCookie(id);
+  });
+
+  document.getElementById('template-list').addEventListener('click', async (e) => {
+    const button = e.target.closest('button[data-template-id]');
+    if (!button) return;
+    const id = button.getAttribute('data-template-id');
+    if (!id || !confirm(`确定删除任务模板 #${id} 吗？`)) return;
+    await deleteTemplate(id);
   });
 
   function getErrorMessage(data, fallback) {
@@ -315,10 +376,35 @@
     return fallback;
   }
 
+  async function editCookie(id) {
+    try {
+      const resp = await fetch(`/api/cookies/${id}`);
+      const data = await readResponseData(resp);
+      setResult(data);
+
+      if (!resp.ok) {
+        const message = getErrorMessage(data, `读取失败（HTTP ${resp.status}）`);
+        throw new Error(message);
+      }
+
+      const form = document.getElementById('cookie-form');
+      form.querySelector('input[name="profile_id"]').value = data.id || '';
+      form.querySelector('input[name="name"]').value = data.name || '';
+      form.querySelector('input[name="site"]').value = data.site || '';
+      form.querySelector('textarea[name="cookie"]').value = '';
+      form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      setResult({ ok: false, error: String(err) });
+    }
+  }
+
   async function deleteCookie(id, force = false) {
     try {
       const suffix = force ? '?force=1' : '';
-      const resp = await fetch(`/api/cookies/${id}${suffix}`, { method: 'DELETE' });
+      const resp = await fetch(`/api/cookies/${id}${suffix}`, {
+        method: 'DELETE',
+        headers: { 'X-Requested-With': 'fetch' }
+      });
       const data = await readResponseData(resp);
       setResult(data);
 
@@ -347,6 +433,39 @@
     } catch (err) {
       setResult({ ok: false, error: String(err) });
     }
+  }
+
+  async function deleteTemplate(id) {
+    try {
+      const resp = await fetch(`/api/templates/${id}`, {
+        method: 'DELETE',
+        headers: { 'X-Requested-With': 'fetch' }
+      });
+      const data = await readResponseData(resp);
+      setResult(data);
+
+      if (!resp.ok) {
+        const message = getErrorMessage(data, `删除失败（HTTP ${resp.status}）`);
+        throw new Error(message);
+      }
+
+      location.reload();
+    } catch (err) {
+      setResult({ ok: false, error: String(err) });
+    }
+  }
+
+  function confirmExportEnv() {
+    if (confirm('导出内容包含明文密钥，确认下载？')) {
+      window.location.href = '/api/settings/export-env';
+    }
+  }
+
+  function applyNovelPromptPreset() {
+    document.querySelector('[name="prompt_system"]').value =
+      '你是一位专业中文小说译者。保持叙事语气、人物称呼和段落结构；逐行对应输出，保留空行与以 ● 开头的章节标记行；只输出译文，不添加解释、警告或省略标记。';
+    document.querySelector('[name="prompt_user"]').value =
+      '目标语言：{language}\\n请逐行对应翻译并保持段落结构：\\n\\n{text}';
   }
 </script>
 {% endblock %}

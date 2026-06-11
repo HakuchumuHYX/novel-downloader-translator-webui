@@ -4,6 +4,7 @@ import builtins
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from book_maker.utils import prompt_config_to_kwargs
 
@@ -27,6 +28,8 @@ def create_translator(
     prompt_config=None,
     temperature=1.0,
     source_lang="auto",
+    context_flag=False,
+    context_paragraph_limit=0,
 ):
     return model(
         key,
@@ -34,6 +37,8 @@ def create_translator(
         api_base=model_api_base,
         temperature=temperature,
         source_lang=source_lang,
+        context_flag=context_flag,
+        context_paragraph_limit=context_paragraph_limit,
         **prompt_config_to_kwargs(prompt_config),
     )
 
@@ -53,23 +58,35 @@ def save_resume_entries(
     mode: str = "json",
     delimiter: str = "\n",
     atomic: bool = False,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     target = Path(path)
     try:
         if atomic:
             temp_path = target.with_suffix(target.suffix + ".tmp")
-            _write_resume(temp_path, entries, mode=mode, delimiter=delimiter)
+            _write_resume(temp_path, entries, mode=mode, delimiter=delimiter, metadata=metadata)
             temp_path.replace(target)
             return
-        _write_resume(target, entries, mode=mode, delimiter=delimiter)
+        _write_resume(target, entries, mode=mode, delimiter=delimiter, metadata=metadata)
     except Exception as exc:
         raise Exception("can not save resume file") from exc
 
 
-def _write_resume(path: Path, entries: list[str], *, mode: str, delimiter: str) -> None:
+def _write_resume(
+    path: Path,
+    entries: list[str],
+    *,
+    mode: str,
+    delimiter: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     if mode == "json":
+        payload: dict[str, Any] = {"version": 2, "p_to_save": entries}
+        if metadata:
+            payload.update(metadata)
+            payload["p_to_save"] = entries
         with open(path, "w", encoding="utf-8") as handle:
-            json.dump({"version": 2, "p_to_save": entries}, handle, ensure_ascii=False)
+            json.dump(payload, handle, ensure_ascii=False)
             handle.flush()
             os.fsync(handle.fileno())
         return
@@ -95,3 +112,14 @@ def load_resume_entries(path: str | Path, *, mode: str = "json", delimiter: str 
         return raw.split(delimiter)
     except Exception as exc:
         raise Exception("can not load resume file") from exc
+
+
+def load_resume_state_with_metadata(path: str | Path) -> dict[str, Any]:
+    try:
+        target = Path(path)
+        if not target.exists():
+            return {}
+        data = json.loads(target.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}

@@ -3,8 +3,30 @@ import backoff
 import logging
 from copy import copy
 
+from bs4 import BeautifulSoup
+
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+def _soup_root(node) -> BeautifulSoup | None:
+    current = node
+    while getattr(current, "parent", None) is not None:
+        current = current.parent
+    return current if hasattr(current, "new_tag") else None
+
+
+def _replace_tag_text_preserving_breaks(tag, text: str, soup: BeautifulSoup | None = None) -> None:
+    tag.clear()
+    soup = soup or _soup_root(tag)
+    lines = str(text or "").split("\n")
+    for idx, line in enumerate(lines):
+        if idx:
+            if soup is not None:
+                tag.append(soup.new_tag("br"))
+            else:
+                tag.append("\n")
+        tag.append(line)
 
 
 class EPUBBookLoaderHelper:
@@ -25,7 +47,7 @@ class EPUBBookLoaderHelper:
         ):
             return
         new_p = copy(p)
-        new_p.string = text
+        _replace_tag_text_preserving_breaks(new_p, text, soup=_soup_root(p))
         if translation_style != "":
             new_p["style"] = translation_style
         p.insert_after(new_p)

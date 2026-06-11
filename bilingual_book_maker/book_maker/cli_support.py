@@ -104,7 +104,7 @@ def resolve_api_key(options):
         return options.groq_key or env.get("BBM_GROQ_API_KEY")
     if options.model == "xai":
         return options.xai_key or env.get("BBM_XAI_API_KEY")
-    if options.model.startswith("qwen-"):
+    if options.model == "qwen" or options.model.startswith("qwen-"):
         return options.qwen_key or env.get("BBM_QWEN_API_KEY")
     return ""
 
@@ -146,7 +146,7 @@ def configure_loader_from_options(loader, options):
         loader.translate_model.set_model_list(_split_model_list(options.model_list))
     if options.model.startswith("claude-"):
         loader.translate_model.set_claude_model(options.model)
-    if options.model.startswith("qwen-"):
+    if options.model == "qwen" or options.model.startswith("qwen-"):
         loader.translate_model.set_qwen_model(options.model)
     if options.block_size > 0:
         loader.block_size = options.block_size

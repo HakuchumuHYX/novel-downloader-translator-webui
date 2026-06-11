@@ -24,6 +24,28 @@ def _iso_from_ts(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
+def bound_log_prune_state(max_entries: int = 1000) -> None:
+    try:
+        limit = max(1, int(max_entries))
+    except Exception:
+        limit = 1000
+
+    with _LOG_PRUNE_LOCK:
+        if len(_LOG_PRUNE_STATE) <= limit:
+            return
+        keep = {
+            task_id
+            for task_id, _ in sorted(
+                _LOG_PRUNE_STATE.items(),
+                key=lambda item: item[1][0],
+                reverse=True,
+            )[:limit]
+        }
+        for task_id in list(_LOG_PRUNE_STATE):
+            if task_id not in keep:
+                _LOG_PRUNE_STATE.pop(task_id, None)
+
+
 def create_task(conn: sqlite3.Connection, payload: dict[str, Any], parent_task_id: int | None = None) -> int:
     now = utcnow_iso()
     cur = conn.execute(
@@ -250,6 +272,32 @@ def update_task_progress(
     conn.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE id = ?", params)
 
 
+def update_task_outputs(
+    conn: sqlite3.Connection,
+    task_id: int,
+    *,
+    download_output_dir: str | None = None,
+    source_output_path: str | None = None,
+    translated_output_path: str | None = None,
+) -> None:
+    fields: list[str] = []
+    params: list[Any] = []
+    for key, value in {
+        "download_output_dir": download_output_dir,
+        "source_output_path": source_output_path,
+        "translated_output_path": translated_output_path,
+    }.items():
+        if value is not None:
+            fields.append(f"{key} = ?")
+            params.append(value)
+
+    if not fields:
+        return
+
+    params.append(task_id)
+    conn.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE id = ?", params)
+
+
 def set_task_finished(
     conn: sqlite3.Connection,
     task_id: int,
@@ -266,9 +314,9 @@ def set_task_finished(
         UPDATE tasks
         SET status = ?,
             finished_at = ?,
-            download_output_dir = ?,
-            source_output_path = ?,
-            translated_output_path = ?,
+            download_output_dir = CASE WHEN ? != '' THEN ? ELSE download_output_dir END,
+            source_output_path = CASE WHEN ? != '' THEN ? ELSE source_output_path END,
+            translated_output_path = CASE WHEN ? != '' THEN ? ELSE translated_output_path END,
             error_message = ?,
             error_code = ?,
             running_pid = NULL
@@ -278,7 +326,10 @@ def set_task_finished(
             status,
             utcnow_iso(),
             download_output_dir,
+            download_output_dir,
             source_output_path,
+            source_output_path,
+            translated_output_path,
             translated_output_path,
             error_message,
             error_code,
@@ -345,6 +396,7 @@ def append_log(conn: sqlite3.Connection, task_id: int, message: str, level: str 
 
     if do_prune:
         _prune_task_logs(conn, task_id)
+        bound_log_prune_state()
 
 
 def get_logs_after(conn: sqlite3.Connection, task_id: int, offset: int) -> list[sqlite3.Row]:
@@ -435,6 +487,14 @@ def get_cookie_profile(conn: sqlite3.Connection, profile_id: int) -> sqlite3.Row
     return conn.execute("SELECT * FROM cookie_profiles WHERE id = ?", (profile_id,)).fetchone()
 
 
+def get_cookie_profile_for_edit(conn: sqlite3.Connection, profile_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT id, name, site, created_at FROM cookie_profiles WHERE id = ?",
+        (profile_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def count_cookie_profile_task_refs(conn: sqlite3.Connection, profile_id: int) -> tuple[int, int]:
     row = conn.execute(
         """
@@ -499,6 +559,11 @@ def list_task_templates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def get_task_template(conn: sqlite3.Connection, template_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM task_templates WHERE id = ?", (template_id,)).fetchone()
+
+
+def delete_task_template(conn: sqlite3.Connection, template_id: int) -> bool:
+    cur = conn.execute("DELETE FROM task_templates WHERE id = ?", (template_id,))
+    return cur.rowcount > 0
 
 
 def delete_task(conn: sqlite3.Connection, task_id: int) -> bool:

@@ -113,6 +113,7 @@
       <button id="resume-btn" onclick="resumeTask()">继续</button>
       <button id="stop-btn" onclick="stopTask()">停止运行中任务</button>
     </div>
+    <p class="hint">下载阶段暂停会停止当前下载器进程，之后可能需要重新下载；翻译阶段暂停会在存在断点状态时继续。</p>
 
     <h3>危险操作</h3>
     <div class="actions">
@@ -239,6 +240,7 @@
   let offset = 0;
 
   const FINISHED_STATES = new Set(['succeeded', 'failed', 'canceled']);
+  const LOG_IDLE_STATES = new Set(['succeeded', 'failed', 'canceled', 'paused']);
   let pollTimer = null;
 
   function updateButtons(task) {
@@ -275,7 +277,10 @@
   }
 
   async function post(url) {
-    const resp = await fetch(url, { method: 'POST' });
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'fetch' }
+    });
     const data = await readResponseData(resp);
     if (!resp.ok) {
       const detail = data.detail || `HTTP ${resp.status}`;
@@ -325,12 +330,17 @@
       appendLogLine(row);
     };
 
+    es.addEventListener('end', () => {
+      try { es.close(); } catch (_) { }
+      if (logSource === es) logSource = null;
+    });
+
     es.onerror = async () => {
       // SSE may not work behind some proxies; fall back to polling.
       try { es.close(); } catch (_) { }
       if (logSource === es) logSource = null;
 
-      if (FINISHED_STATES.has(lastKnownStatus)) return;
+      if (LOG_IDLE_STATES.has(lastKnownStatus)) return;
 
       // best-effort fallback
       try {
@@ -339,7 +349,7 @@
 
       // Keep polling logs after SSE failure (low frequency).
       setTimeout(async function loop() {
-        if (FINISHED_STATES.has(lastKnownStatus)) return;
+        if (LOG_IDLE_STATES.has(lastKnownStatus)) return;
         try {
           await pollLogsOnce();
         } finally {
@@ -495,7 +505,7 @@
     try {
       const resp = await fetch('/api/tasks/{{ task.id }}/purge', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
         body: JSON.stringify({
           scope,
           delete_upload: flags.deleteUpload,
@@ -535,7 +545,10 @@
     });
 
     try {
-      const resp = await fetch(`/api/tasks/{{ task.id }}?${params.toString()}`, { method: 'DELETE' });
+      const resp = await fetch(`/api/tasks/{{ task.id }}?${params.toString()}`, {
+        method: 'DELETE',
+        headers: { 'X-Requested-With': 'fetch' }
+      });
       const data = await readResponseData(resp);
       if (!resp.ok) {
         const detail = data.detail || `HTTP ${resp.status}`;

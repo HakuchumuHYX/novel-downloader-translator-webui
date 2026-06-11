@@ -78,8 +78,10 @@
     <label>任务进程超时（秒）
       <input type="number" name="process_timeout" value="{{ settings.process_timeout }}">
     </label>
-    <label class="checkbox"><input type="checkbox" name="merge_all" checked> 合并全部章节</label>
-    <label class="checkbox"><input type="checkbox" name="record_chapter_number"> 记录章节序号</label>
+    <input type="hidden" name="merge_all" value="false">
+    <label class="checkbox"><input type="checkbox" name="merge_all" value="true" checked> 合并全部章节</label>
+    <input type="hidden" name="record_chapter_number" value="false">
+    <label class="checkbox"><input type="checkbox" name="record_chapter_number" value="true"> 记录章节序号</label>
   </section>
 
   <section class="panel" id="translate_panel">
@@ -106,6 +108,7 @@
     <label>预览条数（test_num）
       <input type="number" name="test_num" id="test_num" value="{{ settings.test_num }}">
     </label>
+    <p class="hint">{{ preview_limit_help }}</p>
   </section>
 
   <details class="panel">
@@ -144,22 +147,13 @@
           placeholder="{{ settings.prompt_system }}"></label>
       <label>prompt_user <input type="text" name="override__prompt_user"
           placeholder="{{ settings.prompt_user }}"></label>
-      <label>openai_key <input type="password" name="override__openai_key" placeholder="（可选覆盖）"></label>
-      <label>claude_key <input type="password" name="override__claude_key" placeholder="（可选覆盖）"></label>
-      <label>gemini_key <input type="password" name="override__gemini_key" placeholder="（可选覆盖）"></label>
-      <label>groq_key <input type="password" name="override__groq_key" placeholder="（可选覆盖）"></label>
-      <label>xai_key <input type="password" name="override__xai_key" placeholder="（可选覆盖）"></label>
-      <label>qwen_key <input type="password" name="override__qwen_key" placeholder="（可选覆盖）"></label>
-      <label>caiyun_key <input type="password" name="override__caiyun_key" placeholder="（可选覆盖）"></label>
-      <label>deepl_key <input type="password" name="override__deepl_key" placeholder="（可选覆盖）"></label>
-      <label>custom_api <input type="password" name="override__custom_api" placeholder="（可选覆盖）"></label>
     </div>
   </details>
 
   <section class="panel">
     <h2>任务模板</h2>
     <label>加载模板
-      <select name="template_id">
+      <select name="template_id" id="template_id">
         <option value="">（无）</option>
         {% for t in templates %}
         <option value="{{ t.id }}">#{{ t.id }} {{ t.name }}</option>
@@ -191,6 +185,7 @@
   const translateMode = document.getElementById('translate_mode');
   const translationOutputMode = document.getElementById('translation_output_mode');
   const testNum = document.getElementById('test_num');
+  const templateSelect = document.getElementById('template_id');
 
   function syncSourceUI() {
     const t = sourceType.value;
@@ -241,12 +236,57 @@
   syncSourceUI();
   syncModeUI();
 
+  function setField(name, value) {
+    const items = document.querySelectorAll(`[name="${name}"]`);
+    if (!items.length) return;
+
+    for (const item of items) {
+      if (item.type === 'checkbox') {
+        item.checked = value === true || value === 'true' || value === '1';
+      } else if (item.type !== 'hidden') {
+        item.value = value ?? '';
+      }
+    }
+  }
+
+  templateSelect?.addEventListener('change', async () => {
+    const id = templateSelect.value;
+    if (!id) return;
+
+    try {
+      const resp = await fetch(`/api/templates/${id}`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+
+      const payload = data.payload || {};
+      for (const key of [
+        'mode', 'source_type', 'source_input', 'cookie_profile_id', 'backend',
+        'paid_policy', 'save_format', 'merge_all', 'merged_name',
+        'record_chapter_number', 'translate_mode', 'translation_output_mode',
+        'test_num', 'process_timeout'
+      ]) {
+        setField(key, payload[key]);
+      }
+      for (const [key, value] of Object.entries(payload.settings_overrides || {})) {
+        setField(`override__${key}`, value);
+      }
+      syncSourceUI();
+      syncModeUI();
+    } catch (err) {
+      document.getElementById('result').textContent = JSON.stringify({ ok: false, error: String(err) }, null, 2);
+    }
+  });
+
   document.getElementById('task-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
     const fd = new FormData(form);
 
-    const resp = await fetch('/api/tasks', { method: 'POST', body: fd });
+    const resp = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'fetch' },
+      body: fd
+    });
     const data = await resp.json();
     document.getElementById('result').textContent = JSON.stringify(data, null, 2);
     if (resp.ok && data.task_id) {

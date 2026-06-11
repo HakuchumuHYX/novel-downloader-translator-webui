@@ -9,35 +9,62 @@ from ebooklib import epub
 from downloader.utils import is_content_txt
 
 
-def create_epub_from_txt(file_path, output_folder):
+def split_marked_chapters(text_content: str) -> list[tuple[str, str]]:
+    chapters: list[tuple[str, list[str]]] = []
+    current_title = ""
+    current_body: list[str] = []
+
+    for line in text_content.splitlines():
+        if line.startswith("● "):
+            if current_title or current_body:
+                chapters.append((current_title or "Untitled", current_body))
+            current_title = line[2:].strip() or "Untitled"
+            current_body = []
+        else:
+            current_body.append(line)
+
+    if current_title or current_body:
+        chapters.append((current_title or "Untitled", current_body))
+
+    return [(title, "\n".join(body).strip()) for title, body in chapters]
+
+
+def body_to_html(chapter_body: str) -> str:
+    paragraphs = [part for part in re.split(r"\n\s*\n", chapter_body) if part.strip()]
+    if not paragraphs:
+        return "<p></p>"
+
+    html_parts: list[str] = []
+    for paragraph in paragraphs:
+        lines = [html.escape(line) for line in paragraph.splitlines()]
+        html_parts.append("<p>" + "<br/>".join(lines) + "</p>")
+    return "".join(html_parts)
+
+
+def create_epub_from_txt(file_path, output_folder, language: str = "ja") -> str:
     print(f"convert {file_path}")
     with open(file_path, "r", encoding="utf-8") as file:
         text_content = file.read()
 
-    chapters = re.split(r"● ", text_content)
+    chapters = split_marked_chapters(text_content)
 
     book = epub.EpubBook()
 
     book.set_identifier("id" + str(os.path.basename(file_path)))
-    title = os.path.basename(file_path).split(".")[:-1][0]
+    title = os.path.splitext(os.path.basename(file_path))[0]
     book.set_title(title)
-    book.set_language("ja")
+    book.set_language(language)
 
     book.spine = ["nav"]
 
-    for i, chapter in enumerate(chapters):
-        if not chapter.strip():
-            continue
-
-        chapter_title, _, chapter_body = chapter.partition("\n")
+    for i, (chapter_title, chapter_body) in enumerate(chapters):
         c = epub.EpubHtml(
             title=chapter_title,
             file_name=f"chap_{i + 1}.xhtml",
-            lang="ja",
+            lang=language,
         )
         safe_title = html.escape(chapter_title)
-        safe_body = html.escape(chapter_body).replace("\n", "<br/>")
-        c.content = "<h1>" + safe_title + "</h1><p>" + safe_body + "</p>"
+        c.content = "<h1>" + safe_title + "</h1>" + body_to_html(chapter_body)
 
         book.add_item(c)
 
@@ -47,7 +74,9 @@ def create_epub_from_txt(file_path, output_folder):
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
 
-    epub.write_epub(os.path.join(output_folder, f"{title}.epub"), book, {})
+    output_path = os.path.join(output_folder, f"{title}.epub")
+    epub.write_epub(output_path, book, {})
+    return output_path
 
 
 def merge_chapters_to_txt(chapters: Iterable, output_path: str, record_chapter_number: bool = False) -> str:
@@ -134,14 +163,16 @@ def _sort_txt_files_for_merge(input_dir: str, txt_files: list[str]) -> list[str]
         except Exception:
             pass
 
-    # Fallback: preserve creation/download order as much as possible.
-    return sorted(
-        txt_files,
-        key=lambda f: (
-            os.stat(os.path.join(input_dir, f)).st_mtime_ns,
-            f,
-        ),
-    )
+    return sorted(txt_files, key=_natural_filename_key)
+
+
+def _natural_filename_key(filename: str) -> tuple[object, ...]:
+    parts: list[object] = []
+    for chunk in re.split(r"(\d+)", filename.lower()):
+        if not chunk:
+            continue
+        parts.append(int(chunk) if chunk.isdigit() else chunk)
+    return tuple(parts)
 
 
 def convert_directory_txt_to_epub(*args):

@@ -20,9 +20,9 @@ DEFAULT_HEADERS = {
 ResultT = TypeVar("ResultT")
 
 
-def prepare_output_dir(output_dir: str, title: str) -> str:
+def prepare_output_dir(output_dir: str, title: str, *, clean: bool = True) -> str:
     path = os.path.join(output_dir, sanitize_filename(title))
-    if os.path.exists(path):
+    if clean and os.path.exists(path):
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
     return path

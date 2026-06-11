@@ -29,6 +29,7 @@ from .worker_file_service import (
     resolve_source_file,
     resolve_translated_file,
     safe_int,
+    scan_translation_quality,
     translate_resume_state_path,
 )
 from .task_service import (
@@ -47,15 +48,66 @@ from .task_service import (
     request_stop_task,
     set_task_finished,
     set_task_pid,
+    update_task_outputs,
     update_task_progress,
 )
+
+
+def classify_command_completion(
+    *,
+    rc: int,
+    local_reason: str | None,
+    paused: bool,
+    stopped: bool,
+    timed_out: bool,
+) -> str:
+    if rc == 0:
+        return "success"
+    if local_reason == "paused" or paused:
+        return "paused"
+    if local_reason in {"stopped", "shutdown"} or stopped:
+        return "stopped"
+    if timed_out:
+        return "timeout"
+    return "failed"
+
+
+def _cleanup_download_work_dirs(download_root: Path) -> None:
+    if not download_root.exists():
+        return
+    for child in download_root.iterdir():
+        if child.is_dir() and (
+            child.name.startswith("_node_job_")
+            or child.name.startswith("_native_job_")
+            or child.name.startswith("_native_kakuyomu_")
+            or child.name.startswith("_cookie_")
+        ):
+            shutil.rmtree(child, ignore_errors=True)
+
+
+def _download_manifest_ok(download_root: Path) -> bool:
+    manifests = sorted(path for path in download_root.rglob("manifest.json") if path.is_file())
+    if not manifests:
+        return False
+    for manifest in manifests:
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            continue
+        if str(payload.get("status", "")).strip().lower() == "ok":
+            return True
+    return False
 
 
 class TaskWorker(threading.Thread):
     def __init__(self) -> None:
         super().__init__(daemon=True)
         self._stop_event = threading.Event()
-        self._cleanup_tick = 0
+        self._last_cleanup_ts = 0.0
+        self._cleanup_interval_seconds = max(
+            1.0,
+            float(os.getenv("WEBUI_CLEANUP_INTERVAL_SECONDS", "600")),
+        )
         self._proc_lock = threading.Lock()
         self._running: dict[int, subprocess.Popen[str]] = {}
         # Track intentional local termination reasons to distinguish pause/stop from real command failures.
@@ -155,6 +207,7 @@ class TaskWorker(threading.Thread):
     def run(self) -> None:
         cfg = get_config()
         while not self._stop_event.is_set():
+            self._maybe_cleanup()
             task_id = None
             with get_conn() as conn:
                 row = claim_next_queued_task(conn)
@@ -162,7 +215,6 @@ class TaskWorker(threading.Thread):
                     task_id = int(row["id"])
 
             if task_id is None:
-                self._maybe_cleanup()
                 self._stop_event.wait(cfg.worker_interval_seconds)
                 continue
 
@@ -246,6 +298,13 @@ class TaskWorker(threading.Thread):
             return None
 
         if file_has_content(candidate):
+            if not _download_manifest_ok(download_root):
+                self._log(
+                    task_id,
+                    "Existing downloaded source lacks a successful manifest; redownloading.",
+                    level="warning",
+                )
+                return None
             self._log(task_id, f"Resuming with existing downloaded source: {candidate}")
             return candidate
 
@@ -296,6 +355,13 @@ class TaskWorker(threading.Thread):
                     with get_conn() as conn:
                         update_task_progress(conn, task_id, stage="download")
                     source_path = self._run_download(task_id, payload, effective_settings, download_root)
+                    with get_conn() as conn:
+                        update_task_outputs(
+                            conn,
+                            task_id,
+                            download_output_dir=str(download_root),
+                            source_output_path=str(source_path),
+                        )
                 except Exception as exc:  # noqa: BLE001
                     raise RuntimeError(f"DOWNLOAD_STAGE: {exc}") from exc
         else:
@@ -303,7 +369,7 @@ class TaskWorker(threading.Thread):
                 raise FileNotFoundError(f"Uploaded file not found: {source_path}")
             self._log(task_id, f"Using uploaded file: {source_path}")
 
-        translated_path = Path("")
+        translated_path: Path | None = None
         if payload.get("mode", "download_and_translate") == "download_and_translate":
             if resume_translate and not has_translate_resume_state(source_path):
                 self._log(
@@ -323,6 +389,8 @@ class TaskWorker(threading.Thread):
                     effective_settings,
                     force_resume=resume_translate,
                 )
+                for warning in scan_translation_quality(translated_path, source_path):
+                    self._log(task_id, f"Translation quality warning: {warning}", level="warning")
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"TRANSLATE_STAGE: {exc}") from exc
 
@@ -330,7 +398,7 @@ class TaskWorker(threading.Thread):
             clear_artifacts(conn, task_id)
             if source_path.exists():
                 add_artifact(conn, task_id, "source", source_path)
-            if translated_path and translated_path.exists():
+            if translated_path is not None and translated_path.exists():
                 add_artifact(conn, task_id, "translated", translated_path)
 
             existing = {Path(r["file_path"]) for r in list_artifacts(conn, task_id)}
@@ -347,7 +415,7 @@ class TaskWorker(threading.Thread):
                 status="succeeded",
                 download_output_dir=str(download_root),
                 source_output_path=str(source_path),
-                translated_output_path=str(translated_path) if translated_path else "",
+                translated_output_path=str(translated_path) if translated_path is not None else "",
                 error_message="",
                 error_code="",
             )
@@ -362,6 +430,7 @@ class TaskWorker(threading.Thread):
         download_root: Path,
     ) -> Path:
         cfg = get_config()
+        _cleanup_download_work_dirs(download_root)
         payload_model = TaskPayload.model_validate(payload)
         save_format = payload_model.save_format or settings.get("save_format", "txt")
 
@@ -559,6 +628,19 @@ class TaskWorker(threading.Thread):
         except ValueError as exc:
             raise ValueError(f"process_timeout must be an integer >= 60: {raw_value}") from exc
 
+    def _handle_command_output_item(self, task_id: int, item: str) -> None:
+        stripped = item.rstrip("\n")
+        if stripped.startswith("__WEBUI_PROGRESS__"):
+            payload = stripped[len("__WEBUI_PROGRESS__") :].strip()
+            try:
+                evt = json.loads(payload)
+                if isinstance(evt, dict):
+                    self._maybe_update_progress_throttled(task_id, evt)
+            except Exception:
+                self._log(task_id, f"Invalid progress event: {payload}", level="warning")
+        else:
+            self._log(task_id, stripped)
+
     def _run_command(
         self,
         task_id: int,
@@ -614,18 +696,7 @@ class TaskWorker(threading.Thread):
                     break
 
                 if item:
-                    stripped = item.rstrip("\n")
-                    if stripped.startswith("__WEBUI_PROGRESS__"):
-                        payload = stripped[len("__WEBUI_PROGRESS__") :].strip()
-                        try:
-                            evt = json.loads(payload)
-                            if isinstance(evt, dict):
-                                self._maybe_update_progress_throttled(task_id, evt)
-                        except Exception:
-                            # Avoid breaking the worker due to malformed progress line.
-                            self._log(task_id, f"Invalid progress event: {payload}", level="warning")
-                    else:
-                        self._log(task_id, stripped)
+                    self._handle_command_output_item(task_id, item)
 
                 # Only enforce timeout/stop/pause while process is still alive.
                 if process.poll() is not None:
@@ -667,47 +738,39 @@ class TaskWorker(threading.Thread):
                         pass
                     rc = process.wait()
 
-            # Drain any remaining buffered output quickly (best effort).
-            drain_deadline = time.monotonic() + 0.5
+            # Drain any remaining buffered output until the reader sentinel or deadline.
+            drain_deadline = time.monotonic() + 2.0
             while time.monotonic() < drain_deadline:
+                timeout = max(0.01, min(0.05, drain_deadline - time.monotonic()))
                 try:
-                    item = q.get_nowait()
+                    item = q.get(timeout=timeout)
                 except queue.Empty:
-                    break
+                    continue
                 if item is None:
                     break
                 if item:
-                    stripped = item.rstrip("\n")
-                    if stripped.startswith("__WEBUI_PROGRESS__"):
-                        payload = stripped[len("__WEBUI_PROGRESS__") :].strip()
-                        try:
-                            evt = json.loads(payload)
-                            if isinstance(evt, dict):
-                                self._maybe_update_progress_throttled(task_id, evt)
-                        except Exception:
-                            self._log(task_id, f"Invalid progress event: {payload}", level="warning")
-                    else:
-                        self._log(task_id, stripped)
+                    self._handle_command_output_item(task_id, item)
 
             # Distinguish intentional local terminate (pause/stop) from real non-zero command failures.
             local_reason = ""
             with self._proc_lock:
                 local_reason = self._terminate_reason.get(task_id, "")
 
-            if rc < 0 and local_reason == "paused":
-                raise RuntimeError("__TASK_PAUSED__")
-            if rc < 0 and local_reason == "stopped":
-                raise RuntimeError("__TASK_STOPPED__")
-            if rc < 0 and local_reason == "shutdown":
-                raise RuntimeError("__TASK_STOPPED__")
+            outcome = classify_command_completion(
+                rc=rc,
+                local_reason=local_reason,
+                paused=paused,
+                stopped=stopped,
+                timed_out=timed_out,
+            )
 
-            if paused:
+            if outcome == "paused":
                 raise RuntimeError("__TASK_PAUSED__")
-            if stopped:
+            if outcome == "stopped":
                 raise RuntimeError("__TASK_STOPPED__")
-            if timed_out:
+            if outcome == "timeout":
                 raise RuntimeError(f"__TASK_TIMEOUT__ command exceeded {timeout_seconds}s")
-            if rc != 0:
+            if outcome == "failed":
                 raise RuntimeError(f"Command failed with exit code {rc}: {redact_command(command)}")
         finally:
             try:
@@ -716,9 +779,10 @@ class TaskWorker(threading.Thread):
                 self._unregister_process(task_id)
 
     def _maybe_cleanup(self) -> None:
-        self._cleanup_tick += 1
-        if self._cleanup_tick % 120 != 0:
+        now = time.monotonic()
+        if self._last_cleanup_ts and (now - self._last_cleanup_ts) < self._cleanup_interval_seconds:
             return
+        self._last_cleanup_ts = now
 
         cfg = get_config()
         days = cfg.cleanup_days

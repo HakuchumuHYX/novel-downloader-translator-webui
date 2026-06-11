@@ -6,6 +6,7 @@ from pathlib import Path
 from ..config import AppConfig
 from ..option_registry import DOWNLOADER_CLI_OPTIONS, SETTING_DEFINITION_MAP, TRANSLATOR_CLI_OPTIONS, parse_bool
 from ..task_models import TaskPayload
+from .settings_service import build_prompt_config_from_settings
 
 OPENAI_DEFAULT_MODEL_LIST = "gpt-5.2"
 
@@ -43,7 +44,7 @@ def build_downloader_command(
     ]
 
     for key, flag in DOWNLOADER_CLI_OPTIONS:
-        if key in {"proxy", "backend", "paid_policy", "save_format", "merged_name"}:
+        if key in {"backend", "paid_policy", "save_format", "merged_name"}:
             continue
         value = settings.get(key, "")
         if value != "":
@@ -101,6 +102,7 @@ def build_translator_command(
             "prompt_text",
             "prompt_system",
             "prompt_user",
+            "glossary",
             "use_context",
             "resume",
             "allow_navigable_strings",
@@ -126,15 +128,19 @@ def build_translator_command(
     prompt_text = settings.get("prompt_text", "")
     prompt_system = settings.get("prompt_system", "")
     prompt_user = settings.get("prompt_user", "")
+    glossary = settings.get("glossary", "")
     if prompt_file:
         command.extend(["--prompt", prompt_file])
     elif prompt_text:
         command.extend(["--prompt", prompt_text])
-    elif prompt_user:
-        prompt_payload = {"user": prompt_user}
-        if prompt_system:
-            prompt_payload["system"] = prompt_system
+    elif prompt_user or prompt_system or glossary:
+        prompt_payload = build_prompt_config_from_settings(settings)
         command.extend(["--prompt", json.dumps(prompt_payload, ensure_ascii=False)])
+    else:
+        extra_env["BBM_PROMPT_USER"] = ""
+        extra_env["BBM_PROMPT_SYSTEM"] = ""
+        extra_env["BBM_GEMINI_PROMPT_USER"] = ""
+        extra_env["BBM_GEMINI_PROMPT_SYSTEM"] = ""
 
     if parse_bool(settings.get("use_context", "false"), default=False):
         command.append("--use_context")

@@ -396,10 +396,15 @@ openai
 |---|---|
 | `WEBUI_WORKER_INTERVAL` | `1.0` |
 | `WEBUI_CLEANUP_DAYS` | `14` |
+| `WEBUI_CLEANUP_INTERVAL_SECONDS` | `600` |
 | `WEBUI_PROCESS_TIMEOUT` | `7200` |
 | `WEBUI_STOP_GRACE_SECONDS` | `8` |
+| `WEBUI_PAUSE_GRACE_SECONDS` | `30` |
 | `WEBUI_TASK_LOG_MAX_LINES` | `2000` |
 | `WEBUI_PROGRESS_MIN_INTERVAL_SECONDS` | `0.5` |
+| `WEBUI_DISPLAY_TZ` | `Asia/Shanghai` |
+
+当前 WebUI 的任务控制依赖进程内 `TaskWorker` 持有子进程句柄，因此只支持一个 Uvicorn worker / 一个应用副本。多 worker 或多副本部署虽然能依靠 SQLite claim 避免重复领取任务，但 pause/stop 请求可能落到没有持有该子进程的副本上；需要外部 worker 编排或共享进程控制后再扩展。
 
 #### 入口覆盖
 
@@ -445,6 +450,9 @@ openai
   - `exclude_translate_tags`
   - `allow_navigable_strings`
   - `interval`
+
+EPUB translation defaults to `translate_tags=p,h1`, so paragraph text and chapter titles are translated.
+
 - 下载行为
   - `proxy`
   - `timeout`
@@ -552,6 +560,7 @@ Cookie Profile 主要用于：
   - `GET /api/tasks/{task_id}/artifacts`
   - `GET /api/tasks/{task_id}/preview`
   - `GET /api/tasks/{task_id}/download`
+  - Preview count uses source-format units: TXT/MD/SRT/PDF count lines, EPUB counts paragraphs.
 - 设置
   - `POST /api/settings`
   - `POST /api/settings/import-env`
@@ -565,6 +574,14 @@ Cookie Profile 主要用于：
   - `GET /api/system/status`
 
 除 `GET /healthz` 和 `GET /redirect/settings` 之外，其余页面和 API 都需要 Basic Auth。
+
+所有 `POST` / `DELETE` API 都需要 Basic Auth，并且需要请求头：
+
+```http
+X-Requested-With: fetch
+```
+
+这是 WebUI 的最小 CSRF 防护。浏览器页面内的 fetch 已自动附带；外部脚本、curl、集成调用也必须显式带上该头，否则返回 403。
 
 ## 本地开发
 
@@ -610,7 +627,13 @@ export TRANSLATOR_ENTRY="$(pwd)/bilingual_book_maker"
 uvicorn webui.app.main:app --host 0.0.0.0 --port 7860 --reload
 ```
 
+生产部署不要使用多个 Uvicorn worker 或多个 WebUI 副本运行同一个 SQLite 队列；当前版本按单 worker 设计。
+
 ## 常见问题
+
+### 暂停下载和暂停翻译有什么区别？
+
+下载阶段的暂停会停止当前下载器进程，下载器本身不承诺章节级断点，继续任务时可能需要重新下载。翻译阶段的暂停会尽量写入 `.temp.bin` 等断点状态；同一个任务继续时，在断点存在的情况下可以续跑。
 
 ### 1. `syosetu-r18` 下载失败
 

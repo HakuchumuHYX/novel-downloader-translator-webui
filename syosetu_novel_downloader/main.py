@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import aiohttp
 
@@ -41,6 +42,7 @@ def _run_cli() -> None:
 
         print(traceback.format_exc())
         print("check your network or proxy")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

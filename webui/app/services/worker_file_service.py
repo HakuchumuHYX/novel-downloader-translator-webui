@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Callable
 
 
+REFUSAL_MARKERS = ("i'm sorry", "无法翻译", "不能翻译", "抱歉", "不适合")
+
+
 def safe_int(value) -> int:
     try:
         return int(value)
@@ -55,7 +58,10 @@ def list_source_candidates(download_root: Path, save_format: str) -> list[Path]:
     def is_source_candidate(path: Path) -> bool:
         name = path.name.lower()
         excluded_markers = ("_翻译", "_temp", "source_metadata", "readme")
-        return not any(marker in name for marker in excluded_markers)
+        ignored_path_markers = ("_node_job_", "_native_job_", "_native_kakuyomu_", "_cookie_")
+        return not any(marker in name for marker in excluded_markers) and not any(
+            marker in part.lower() for marker in ignored_path_markers for part in path.parts
+        )
 
     return sorted(
         [
@@ -84,12 +90,40 @@ def resolve_translated_file(source_path: Path) -> Path | None:
 
     matches = sorted(
         [
-            *parent.glob(f"{stem}_翻译*"),
+            *[
+                path
+                for path in parent.glob(f"{stem}_翻译*")
+                if path.is_file() and "_temp" not in path.name.lower()
+            ],
         ],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
     return matches[0] if matches else None
+
+
+def scan_translation_quality(path: Path, source_path: Path | None = None) -> list[str]:
+    if not path.exists() or not path.is_file():
+        return ["translated output is missing"]
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    warnings: list[str] = []
+    if not text.strip():
+        warnings.append("translated output is empty")
+    lower = text.lower()
+    if any(marker in lower for marker in REFUSAL_MARKERS):
+        warnings.append("refusal marker found in translated output")
+    if source_path and source_path.exists():
+        source_lines = [
+            line
+            for line in source_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            if line.strip()
+        ]
+        output_lines = [line for line in text.splitlines() if line.strip()]
+        if source_lines and output_lines and len(output_lines) < max(1, len(source_lines) // 2):
+            warnings.append("line count ratio is suspicious")
+        if any(line.startswith("● ") for line in source_lines) and "● " not in text:
+            warnings.append("chapter marker is missing from translated output")
+    return warnings
 
 
 def collect_artifacts(task_root: Path) -> list[Path]:

@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from ..services.settings_service import DEFAULT_SETTINGS, load_settings, save_settings
-from ..security import verify_basic_auth
+from ..services.settings_service import DEFAULT_SETTINGS, load_settings, save_settings, validate_settings_update
+from ..security import verify_basic_auth, verify_fetch_request
 from ..schemas import EnvImportRequest
 from ..services.env_service import export_settings_to_env, import_env_to_settings
 from ..option_registry import parse_bool
@@ -15,13 +15,20 @@ router = APIRouter()
 
 
 @router.post("/api/settings")
-async def api_save_settings(request: Request, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+async def api_save_settings(
+    request: Request,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     if request.headers.get("content-type", "").startswith("application/json"):
         body = await request.json()
         incoming = {key: str(value) for key, value in body.items()}
     else:
         form = await request.form()
-        incoming = {key: str(value) for key, value in form.items() if not isinstance(value, UploadFile)}
+        incoming = {}
+        for key, value in form.multi_items():
+            if not isinstance(value, UploadFile):
+                incoming[key] = str(value)
 
     filtered = {key: value for key, value in incoming.items() if key in DEFAULT_SETTINGS}
     clear_keys = {
@@ -31,6 +38,10 @@ async def api_save_settings(request: Request, _: str = Depends(verify_basic_auth
     }
     with get_conn() as conn:
         try:
+            current = load_settings(conn)
+            validation = validate_settings_update(current, filtered)
+            if not validation.ok:
+                raise HTTPException(status_code=400, detail=validation.message)
             save_settings(conn, filtered, clear_keys=clear_keys)
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -39,7 +50,11 @@ async def api_save_settings(request: Request, _: str = Depends(verify_basic_auth
 
 
 @router.post("/api/settings/import-env")
-async def api_import_env(request: Request, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+async def api_import_env(
+    request: Request,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     raw_text = ""
     if request.headers.get("content-type", "").startswith("application/json"):
         body = await request.json()
@@ -58,6 +73,10 @@ async def api_import_env(request: Request, _: str = Depends(verify_basic_auth)) 
     mapped = import_env_to_settings(raw_text)
     with get_conn() as conn:
         try:
+            current = load_settings(conn)
+            validation = validate_settings_update(current, mapped)
+            if not validation.ok:
+                raise HTTPException(status_code=400, detail=validation.message)
             save_settings(conn, mapped)
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -19,6 +19,19 @@ SENSITIVE_FLAGS = {
     "--cookie-file",
 }
 
+AUTH_ERROR_MARKERS = (
+    "401",
+    "403",
+    "unauthorized",
+    "forbidden",
+    "login required",
+    "authentication failed",
+    "auth failed",
+    "invalid api key",
+    "invalid cookie",
+    "cookie expired",
+)
+
 
 def classify_worker_error(exc: Exception) -> tuple[str, str]:
     msg = str(exc)
@@ -33,7 +46,7 @@ def classify_worker_error(exc: Exception) -> tuple[str, str]:
         return "failed", "DOWNLOAD_FAILED"
     if "translate_stage:" in low:
         return "failed", "TRANSLATE_FAILED"
-    if "auth" in low or "forbidden" in low or "unauthorized" in low or "cookie" in low:
+    if any(marker in low for marker in AUTH_ERROR_MARKERS):
         return "failed", "AUTH_FAILED"
     if "translate" in low or "translated output" in low:
         return "failed", "TRANSLATE_FAILED"
@@ -85,7 +98,15 @@ def terminate_process(process: subprocess.Popen[str], *, stop_grace_seconds: flo
             return False
 
     if reason_norm == "paused":
-        if send(signal.SIGINT) and wait(max(float(stop_grace_seconds), 8.0)):
+        pause_grace_seconds = max(float(stop_grace_seconds), 8.0)
+        try:
+            pause_grace_seconds = max(
+                pause_grace_seconds,
+                float(os.getenv("WEBUI_PAUSE_GRACE_SECONDS", "30")),
+            )
+        except ValueError:
+            pass
+        if send(signal.SIGINT) and wait(pause_grace_seconds):
             return
 
     if send(signal.SIGTERM) and wait(max(float(stop_grace_seconds), 2.0)):

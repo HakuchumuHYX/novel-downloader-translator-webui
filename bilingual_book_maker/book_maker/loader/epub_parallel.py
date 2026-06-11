@@ -228,9 +228,7 @@ def process_chapter_parallel(loader, chapter_data):
                         loader.single_translate,
                     )
 
-                with loader._progress_lock:
-                    if save_index % 20 == 0:
-                        loader._save_progress()
+                loader._maybe_checkpoint(save_index, thread_safe=True)
 
         if soup:
             chapter_result["processed_content"] = soup.encode(encoding="utf-8")

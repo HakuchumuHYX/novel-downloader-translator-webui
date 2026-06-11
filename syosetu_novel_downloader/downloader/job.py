@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,10 @@ from pathlib import Path
 from .adapters import NativeFallbackAdapter, NativeKakuyomuAdapter, NodeNovelAdapter
 from .models import DownloadOptions, DownloadResult, RunManifest
 from .utils import detect_site_from_url, sanitize_filename, write_manifest
+
+
+def retry_delay_seconds(attempt: int, base: float = 1.0, maximum: float = 30.0) -> float:
+    return min(maximum, max(0.0, base) * (2 ** max(0, attempt)))
 
 
 class DownloadJob:
@@ -39,6 +44,8 @@ class DownloadJob:
                     break
                 except Exception as exc:  # noqa: BLE001
                     last_error = f"{adapter.name} attempt {attempt} failed: {exc}"
+                    if attempt <= self.options.retries:
+                        time.sleep(retry_delay_seconds(attempt - 1, base=max(1.0, self.options.rate_limit)))
             if result:
                 break
             if last_error:

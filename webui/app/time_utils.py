@@ -1,10 +1,20 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
-CN_TZ = timezone(timedelta(hours=8))
+DEFAULT_DISPLAY_TZ = "Asia/Shanghai"
+
+
+def display_timezone():
+    name = os.getenv("WEBUI_DISPLAY_TZ", DEFAULT_DISPLAY_TZ).strip() or DEFAULT_DISPLAY_TZ
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return timezone.utc
 
 
 def format_local_timestamp(value: Any) -> str:
@@ -21,4 +31,4 @@ def format_local_timestamp(value: Any) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
 
-    return dt.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    return dt.astimezone(display_timezone()).strftime("%Y-%m-%d %H:%M:%S")

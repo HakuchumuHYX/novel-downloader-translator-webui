@@ -8,6 +8,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 from ebooklib import ITEM_DOCUMENT, epub
+from fastapi import HTTPException
 
 try:
     import fitz
@@ -83,7 +84,7 @@ def preview_epub_file(path: Path, page: int = 1) -> PreviewResult:
 
 def preview_pdf_file(path: Path, page: int = 1) -> PreviewResult:
     if fitz is None:
-        raise RuntimeError("PyMuPDF is required to preview PDF files")
+        raise HTTPException(status_code=400, detail="PyMuPDF is required to preview PDF files")
 
     with fitz.open(path) as document:
         total_pages = max(1, document.page_count)

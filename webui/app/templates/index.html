@@ -51,6 +51,7 @@
           <span class="status status-{{ t.status }}">
             {% if t.status == 'queued' %}排队中
             {% elif t.status == 'running' %}运行中
+            {% elif t.status == 'paused' %}已暂停
             {% elif t.status == 'succeeded' %}成功
             {% elif t.status == 'failed' %}失败
             {% elif t.status == 'canceled' %}已取消

@@ -14,14 +14,14 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from ..db import get_conn
 from ..runtime import get_app_config, get_worker
 from ..schemas import TaskBatchActionRequest, TaskPurgeRequest, TaskTemplateCreateRequest
-from ..security import verify_basic_auth
+from ..security import verify_basic_auth, verify_fetch_request
 from ..time_utils import format_local_timestamp
 from ..services.settings_service import (
     load_settings,
     load_task_payload,
     merged_settings,
     validate_task_payload,
-    validate_translation_settings,
+    validate_translation_request,
 )
 from ..services.task_management_service import (
     delete_task_records,
@@ -34,6 +34,9 @@ from ..services.task_management_service import (
     safe_delete_upload_file,
     safe_path,
     safe_task_file_path,
+    sanitize_task_payload_dict_for_api,
+    strip_secret_overrides_for_template,
+    validate_retry_source_available,
 )
 from ..services.task_payload_service import build_task_payload, task_parallel_workers
 from ..services.task_service import (
@@ -41,6 +44,7 @@ from ..services.task_service import (
     count_tasks,
     create_task,
     create_task_template,
+    delete_task_template,
     get_logs_after,
     get_task,
     get_task_template,
@@ -52,6 +56,17 @@ from ..ui import templates
 
 
 router = APIRouter()
+ALLOWED_UPLOAD_SUFFIXES = {".txt", ".epub", ".md", ".pdf", ".srt"}
+LOG_STREAM_END_STATES = {"succeeded", "failed", "canceled", "paused"}
+
+
+def _load_log_rows_and_status(task_id: int, offset: int) -> tuple[list[Any], str | None]:
+    with get_conn() as conn:
+        row = get_task(conn, task_id)
+        if not row:
+            return [], None
+        rows = get_logs_after(conn, task_id, offset)
+        return rows, str(row["status"])
 
 
 @router.post("/api/tasks")
@@ -59,6 +74,7 @@ async def api_create_task(
     request: Request,
     upload_file: UploadFile | None = File(default=None),
     _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
 ) -> JSONResponse:
     form = await request.form()
 
@@ -82,6 +98,8 @@ async def api_create_task(
     task_id: int | None = None
     if upload_file and upload_file.filename:
         suffix = Path(upload_file.filename).suffix.lower()
+        if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+            raise HTTPException(status_code=400, detail="Unsupported upload file type")
         temp_name = f"{uuid.uuid4().hex}{suffix}"
         target = get_app_config().upload_root / temp_name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -119,7 +137,7 @@ async def api_create_task(
         with get_conn() as conn:
             base_settings = load_settings(conn)
             effective_settings = merged_settings(base_settings, task_payload.get("settings_overrides", {}))
-            settings_validation = validate_translation_settings(effective_settings)
+            settings_validation = validate_translation_request(effective_settings, task_payload)
             if not settings_validation.ok:
                 raise HTTPException(status_code=400, detail=settings_validation.message)
 
@@ -176,6 +194,7 @@ async def api_purge_task(
     task_id: int,
     request: Request,
     _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
 ) -> JSONResponse:
     if request.headers.get("content-type", "").startswith("application/json"):
         body = await request.json()
@@ -219,6 +238,7 @@ def api_delete_task(
     delete_upload: bool = Query(default=False),
     cascade: bool = Query(default=False),
     _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
 ) -> JSONResponse:
     with get_conn() as conn:
         deleted_ids, upload_paths = delete_task_records(conn, task_id, force=force, cascade=cascade)
@@ -247,6 +267,7 @@ def api_delete_task(
 async def api_batch_purge_tasks(
     request: Request,
     _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
 ) -> JSONResponse:
     body = await request.json()
     payload = TaskBatchActionRequest.model_validate(body)
@@ -282,6 +303,7 @@ async def api_batch_purge_tasks(
 async def api_batch_delete_tasks(
     request: Request,
     _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
 ) -> JSONResponse:
     body = await request.json()
     payload = TaskBatchActionRequest.model_validate(body)
@@ -335,6 +357,9 @@ async def api_batch_delete_tasks(
 @router.get("/api/tasks/{task_id}/logs")
 def api_task_logs(task_id: int, offset: int = Query(default=0), _: str = Depends(verify_basic_auth)) -> JSONResponse:
     with get_conn() as conn:
+        row = get_task(conn, task_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Task not found")
         logs = get_logs_after(conn, task_id, offset)
     items = [row_to_dict(row) for row in logs]
     next_offset = items[-1]["id"] if items else offset
@@ -348,6 +373,10 @@ async def api_task_logs_stream(
     offset: int = Query(default=0, ge=0),
     _: str = Depends(verify_basic_auth),
 ) -> StreamingResponse:
+    with get_conn() as conn:
+        if not get_task(conn, task_id):
+            raise HTTPException(status_code=404, detail="Task not found")
+
     async def _gen():
         nonlocal offset
         last_ping = time.monotonic()
@@ -357,8 +386,7 @@ async def api_task_logs_stream(
             if await request.is_disconnected():
                 break
 
-            with get_conn() as conn:
-                rows = get_logs_after(conn, task_id, offset)
+            rows, status = await asyncio.to_thread(_load_log_rows_and_status, task_id, offset)
 
             if rows:
                 for row in rows:
@@ -371,7 +399,10 @@ async def api_task_logs_stream(
                     offset = int(row["id"])
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 last_ping = time.monotonic()
-            elif time.monotonic() - last_ping >= 10.0:
+            if status is None or status in LOG_STREAM_END_STATES:
+                yield "event: end\ndata: {}\n\n"
+                break
+            if not rows and time.monotonic() - last_ping >= 10.0:
                 yield ": ping\n\n"
                 last_ping = time.monotonic()
 
@@ -385,18 +416,27 @@ async def api_task_logs_stream(
 
 
 @router.post("/api/tasks/{task_id}/retry")
-def api_retry_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+def api_retry_task(
+    task_id: int,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     with get_conn() as conn:
         row = get_task(conn, task_id)
         if not row:
             raise HTTPException(status_code=404, detail="Task not found")
         payload = load_task_payload(row)
+        validate_retry_source_available(payload)
         new_id = create_task(conn, payload, parent_task_id=task_id)
     return JSONResponse({"ok": True, "task_id": new_id})
 
 
 @router.post("/api/tasks/{task_id}/run-full")
-def api_run_full_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+def api_run_full_task(
+    task_id: int,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     with get_conn() as conn:
         row = get_task(conn, task_id)
         if not row:
@@ -427,7 +467,11 @@ def api_run_full_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSON
 
 
 @router.post("/api/tasks/{task_id}/cancel")
-def api_cancel_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+def api_cancel_task(
+    task_id: int,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     with get_conn() as conn:
         row = get_task(conn, task_id)
         if not row:
@@ -439,7 +483,11 @@ def api_cancel_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONRe
 
 
 @router.post("/api/tasks/{task_id}/stop")
-def api_stop_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+def api_stop_task(
+    task_id: int,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     worker = get_worker()
     if worker is None:
         raise HTTPException(status_code=500, detail="Worker is not initialized")
@@ -447,7 +495,11 @@ def api_stop_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResp
 
 
 @router.post("/api/tasks/{task_id}/pause")
-def api_pause_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+def api_pause_task(
+    task_id: int,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     worker = get_worker()
     if worker is None:
         raise HTTPException(status_code=500, detail="Worker is not initialized")
@@ -455,7 +507,11 @@ def api_pause_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONRes
 
 
 @router.post("/api/tasks/{task_id}/resume")
-def api_resume_task(task_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+def api_resume_task(
+    task_id: int,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
     with get_conn() as conn:
         ok = resume_task(conn, task_id)
     return JSONResponse({"ok": ok})
@@ -544,8 +600,33 @@ def api_task_download(
 async def api_save_template(
     payload: TaskTemplateCreateRequest,
     _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
 ) -> JSONResponse:
     with get_conn() as conn:
-        template_id = create_task_template(conn, payload.name.strip(), payload.payload)
+        safe_payload = strip_secret_overrides_for_template(payload.payload)
+        template_id = create_task_template(conn, payload.name.strip(), safe_payload)
 
     return JSONResponse({"ok": True, "id": template_id})
+
+
+@router.get("/api/templates/{template_id}")
+def api_get_template(template_id: int, _: str = Depends(verify_basic_auth)) -> JSONResponse:
+    with get_conn() as conn:
+        row = get_task_template(conn, template_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Template not found")
+    payload = sanitize_task_payload_dict_for_api(load_task_payload(row))
+    return JSONResponse({"id": template_id, "payload": payload})
+
+
+@router.delete("/api/templates/{template_id}")
+def api_delete_template(
+    template_id: int,
+    _: str = Depends(verify_basic_auth),
+    _csrf: None = Depends(verify_fetch_request),
+) -> JSONResponse:
+    with get_conn() as conn:
+        deleted = delete_task_template(conn, template_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return JSONResponse({"ok": True, "deleted_id": template_id})

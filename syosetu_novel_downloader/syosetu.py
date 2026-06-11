@@ -1,7 +1,9 @@
+import json
 import os
 import re
 from asyncio import Semaphore, gather
 from collections.abc import Callable
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -13,6 +15,89 @@ from downloader.utils import sanitize_filename
 
 
 MAIN_URL: str = "https://ncode.syosetu.com"
+CHAPTER_MANIFEST_NAME = "_chapter_manifest.json"
+
+
+def _chapter_output_path(file_path: str) -> Path:
+    return Path(f"{file_path}.txt")
+
+
+def _relative_output_file_path(book_dir: Path, file_path: str) -> str:
+    output_path = _chapter_output_path(file_path)
+    try:
+        return str(output_path.relative_to(book_dir))
+    except ValueError:
+        return output_path.name
+
+
+def _load_chapter_manifest(book_dir: Path) -> dict[int, dict[str, str]]:
+    manifest_path = book_dir / CHAPTER_MANIFEST_NAME
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    chapters = raw.get("chapters")
+    if not isinstance(chapters, list):
+        return {}
+
+    entries: dict[int, dict[str, str]] = {}
+    for entry in chapters:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            chapter_index = int(entry.get("index"))
+        except (TypeError, ValueError):
+            continue
+        entries[chapter_index] = {
+            "status": str(entry.get("status") or ""),
+            "file_path": str(entry.get("file_path") or ""),
+        }
+    return entries
+
+
+def _write_chapter_manifest_entry(book_dir: Path, chapter_index: int, file_path: str, status: str) -> None:
+    entries = _load_chapter_manifest(book_dir)
+    entries[int(chapter_index)] = {
+        "status": status,
+        "file_path": _relative_output_file_path(book_dir, file_path),
+    }
+    payload = {
+        "version": 1,
+        "chapters": [
+            {"index": index, **entry}
+            for index, entry in sorted(entries.items())
+        ],
+    }
+    (book_dir / CHAPTER_MANIFEST_NAME).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _chapter_output_has_content(book_dir: Path, file_path: str) -> bool:
+    path = Path(file_path)
+    if not path.is_absolute():
+        path = book_dir / path
+    return path.is_file() and bool(path.read_text(encoding="utf-8", errors="ignore").strip())
+
+
+def _filter_pending_chapter_jobs(book_dir: str | Path, jobs: list[tuple[int, str]]) -> tuple[list[tuple[int, str]], list[int]]:
+    book_path = Path(book_dir)
+    entries = _load_chapter_manifest(book_path)
+    pending: list[tuple[int, str]] = []
+    skipped: list[int] = []
+
+    for chapter_index, file_path in jobs:
+        entry = entries.get(int(chapter_index), {})
+        status = str(entry.get("status") or "").lower()
+        entry_path = str(entry.get("file_path") or _relative_output_file_path(book_path, file_path))
+        if status in {"ok", "completed"} and _chapter_output_has_content(book_path, entry_path):
+            skipped.append(chapter_index)
+            continue
+        pending.append((chapter_index, file_path))
+
+    return pending, skipped
 
 
 class Syosetu:
@@ -198,14 +283,15 @@ class Syosetu:
     async def __async_save_txt(self, title: ChapterTitle | PartTitle, content: ChapterContent, chapter_index, file_path: str) -> None:
         chapter_suffix = f"[総第{chapter_index}話]" if self.record_chapter_index else ""
         await write_chapter_text(file_path, str(title), str(content), chapter_suffix=chapter_suffix)
+        _write_chapter_manifest_entry(_chapter_output_path(file_path).parent, int(chapter_index), file_path, "ok")
 
     async def async_fetch(self, chapter_index: int, file_path: str) -> tuple[int, str, ChapterTitle, ChapterContent]:
         async with self.__semaphore:
             title, content = await self.__get_chapter_title_content(chapter_index)
             return chapter_index, file_path, title, content
 
-    async def async_download(self, output_dir) -> None:
-        output_dir = prepare_output_dir(output_dir, self.novel_title)
+    async def async_download(self, output_dir) -> str:
+        output_dir = prepare_output_dir(output_dir, self.novel_title, clean=False)
         parts: dict[PartTitle, ChapterRange] = await self.__get_novel_parts()
         print((len(parts) == 0) and "No part\n" or f"All parts:\n{chr(10).join(list(parts.keys()))}\n")
 
@@ -221,6 +307,13 @@ class Syosetu:
 
         async def _run_jobs(jobs):
             nonlocal downloaded
+            jobs, skipped = _filter_pending_chapter_jobs(output_dir, list(jobs))
+            downloaded += len(skipped)
+            if self.progress_callback and skipped:
+                self.progress_callback(downloaded, self.total_chapters)
+            if not jobs:
+                return
+
             def _on_progress(current: int, _: int) -> None:
                 if self.progress_callback:
                     self.progress_callback(downloaded + current, self.total_chapters)
@@ -246,6 +339,7 @@ class Syosetu:
                     for chapter_index in self.__get_chapters_range()
                 ]
             )
+        return output_dir
 
 
 def _parse_cookie_header(cookie_header: str) -> dict[str, str]:

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
-import tempfile
 from pathlib import Path
 
 from syosetu import Syosetu
@@ -32,10 +30,11 @@ class NativeFallbackAdapter(BackendAdapter):
         if options.paid_policy != "skip":
             raise RuntimeError("Native fallback does not support paid_policy other than skip")
 
-        temp_dir = Path(tempfile.mkdtemp(prefix="_native_job_", dir=options.output_dir))
+        novel_id = extract_syosetu_novel_id(options.url)
+        temp_dir = options.output_dir / ".work" / f"{site}_{novel_id}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            novel_id = extract_syosetu_novel_id(options.url)
             if site == "novel18":
                 book_dir = asyncio.run(
                     _run_native_download(
@@ -93,8 +92,7 @@ class NativeFallbackAdapter(BackendAdapter):
                 chapters=chapters,
             )
         finally:
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            pass
 
 
 async def _run_native_download(
@@ -120,15 +118,9 @@ async def _run_native_download(
     await syosetu.async_init()
     try:
         part_titles = await syosetu.get_novel_part_titles()
-        await syosetu.async_download(str(temp_dir))
+        book_dir = Path(await syosetu.async_download(str(temp_dir)))
     finally:
         await syosetu.async_close()
-
-    dirs = [p for p in temp_dir.iterdir() if p.is_dir()]
-    if not dirs:
-        raise RuntimeError("Native downloader produced no output directory")
-
-    book_dir = dirs[0]
     if part_titles:
         order_file = book_dir / "_parts_order.json"
         order_file.write_text(

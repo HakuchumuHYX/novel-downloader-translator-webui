@@ -4,7 +4,6 @@ import json
 import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 from collections import deque
@@ -26,7 +25,9 @@ class NodeNovelAdapter(BackendAdapter):
         site = options.site if options.site != "auto" else detect_site_from_url(options.url)
         site_id = "kakuyomu" if site == "kakuyomu" else "syosetu"
 
-        temp_dir = Path(tempfile.mkdtemp(prefix="_node_job_", dir=options.output_dir))
+        work_id = sanitize_filename(options.url, default="novel")
+        temp_dir = options.output_dir / ".work" / f"node_{site}_{work_id}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
         cookie_temp_file: Path | None = None
         cookie_temp_dir: Path | None = None
 
@@ -176,8 +177,6 @@ class NodeNovelAdapter(BackendAdapter):
                 cookie_temp_file.unlink(missing_ok=True)
             if cookie_temp_dir and cookie_temp_dir.exists():
                 shutil.rmtree(cookie_temp_dir, ignore_errors=True)
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
             if options.rate_limit > 0:
                 time.sleep(options.rate_limit)
 
@@ -192,7 +191,6 @@ def _build_node_command(*, site_id: str, output_dir: Path, url: str) -> list[str
             site_id,
             "--outputDir",
             str(output_dir),
-            "--disableCheckExists",
             url,
         ]
 
@@ -208,7 +206,6 @@ def _build_node_command(*, site_id: str, output_dir: Path, url: str) -> list[str
             site_id,
             "--outputDir",
             str(output_dir),
-            "--disableCheckExists",
             url,
         ]
 
@@ -339,8 +336,12 @@ def _parse_node_txt_chapters(root: Path, txt_files: list[Path]) -> list[Chapter]
         volume = " / ".join(rel_parts[:-1]) if len(rel_parts) > 1 else ""
 
         lines = text.splitlines()
-        chapter_title = lines[0].strip() if lines else txt.stem
-        content = "\n".join(lines[1:]).strip() if len(lines) > 1 else text
+        if lines and lines[0].startswith("● "):
+            chapter_title = lines[0][2:].strip() or txt.stem
+            content = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
+        else:
+            chapter_title = txt.stem
+            content = text
 
         chapters.append(
             Chapter(
