@@ -187,6 +187,25 @@
   const testNum = document.getElementById('test_num');
   const templateSelect = document.getElementById('template_id');
 
+  async function readResponseData(resp) {
+    const text = await resp.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return { detail: text };
+    }
+  }
+
+  function getErrorMessage(data, fallback) {
+    if (!data) return fallback;
+    const detail = data.detail;
+    if (typeof detail === 'string' && detail) return detail;
+    if (detail && typeof detail === 'object') return JSON.stringify(detail, null, 2);
+    if (typeof data.message === 'string' && data.message) return data.message;
+    return fallback;
+  }
+
   function syncSourceUI() {
     const t = sourceType.value;
 
@@ -238,7 +257,7 @@
 
   function setField(name, value) {
     const items = document.querySelectorAll(`[name="${name}"]`);
-    if (!items.length) return;
+    if (!items.length) return false;
 
     for (const item of items) {
       if (item.type === 'checkbox') {
@@ -247,6 +266,7 @@
         item.value = value ?? '';
       }
     }
+    return true;
   }
 
   templateSelect?.addEventListener('change', async () => {
@@ -255,8 +275,8 @@
 
     try {
       const resp = await fetch(`/api/templates/${id}`);
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+      const data = await readResponseData(resp);
+      if (!resp.ok) throw new Error(getErrorMessage(data, `HTTP ${resp.status}`));
 
       const payload = data.payload || {};
       for (const key of [
@@ -267,8 +287,16 @@
       ]) {
         setField(key, payload[key]);
       }
+      const unmatchedOverrides = [];
       for (const [key, value] of Object.entries(payload.settings_overrides || {})) {
-        setField(`override__${key}`, value);
+        if (!setField(`override__${key}`, value)) unmatchedOverrides.push(key);
+      }
+      if (unmatchedOverrides.length) {
+        document.getElementById('result').textContent = JSON.stringify(
+          { ok: true, warning: `未回填字段: ${unmatchedOverrides.join(', ')}` },
+          null,
+          2
+        );
       }
       syncSourceUI();
       syncModeUI();
@@ -280,17 +308,28 @@
   document.getElementById('task-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
+    const submitButton = form.querySelector('button[type="submit"]');
     const fd = new FormData(form);
 
-    const resp = await fetch('/api/tasks', {
-      method: 'POST',
-      headers: { 'X-Requested-With': 'fetch' },
-      body: fd
-    });
-    const data = await resp.json();
-    document.getElementById('result').textContent = JSON.stringify(data, null, 2);
-    if (resp.ok && data.task_id) {
-      window.location.href = `/tasks/${data.task_id}`;
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const resp = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'fetch' },
+        body: fd
+      });
+      const data = await readResponseData(resp);
+      document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+      if (!resp.ok) {
+        throw new Error(getErrorMessage(data, `HTTP ${resp.status}`));
+      }
+      if (data.task_id) {
+        window.location.href = `/tasks/${data.task_id}`;
+      }
+    } catch (err) {
+      document.getElementById('result').textContent = JSON.stringify({ ok: false, error: String(err) }, null, 2);
+    } finally {
+      if (submitButton) submitButton.disabled = false;
     }
   });
 </script>

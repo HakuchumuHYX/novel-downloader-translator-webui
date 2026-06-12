@@ -1,5 +1,6 @@
 import ast
 import argparse
+import asyncio
 import json
 import sqlite3
 import sys
@@ -266,6 +267,22 @@ def test_new_task_template_submits_false_for_unchecked_checkboxes():
     assert 'type="hidden" name="record_chapter_number" value="false"' in template
 
 
+def test_new_task_form_uses_robust_response_parser_and_submit_guard():
+    html = Path("webui/app/templates/new_task.html").read_text(encoding="utf-8")
+
+    assert "async function readResponseData(resp)" in html
+    assert "submitButton.disabled = true;" in html
+    assert "submitButton.disabled = false;" in html
+    assert "await resp.json()" not in html
+
+
+def test_new_task_template_load_reports_unmatched_overrides():
+    html = Path("webui/app/templates/new_task.html").read_text(encoding="utf-8")
+
+    assert "const unmatchedOverrides = [];" in html
+    assert "unmatchedOverrides.push(key);" in html
+
+
 def test_build_task_payload_empty_override_keeps_template_value():
     payload = build_task_payload(
         {
@@ -456,6 +473,16 @@ def test_list_source_candidates_ignores_downloader_temp_dirs(tmp_path: Path):
     bad.write_text("fragment larger than complete", encoding="utf-8")
 
     assert list_source_candidates(tmp_path, save_format="txt") == [good]
+
+
+def test_list_source_candidates_ignores_work_dir(tmp_path: Path):
+    work = tmp_path / ".work" / "node_x"
+    work.mkdir(parents=True)
+    (work / "chapter.txt").write_text("fragment bigger than final", encoding="utf-8")
+    final = tmp_path / "book.txt"
+    final.write_text("final", encoding="utf-8")
+
+    assert list_source_candidates(tmp_path, save_format="txt") == [final]
 
 
 def test_resolve_translated_file_ignores_temp_output(tmp_path: Path):
@@ -829,6 +856,42 @@ def test_txt_loader_batches_by_chapter_and_blank_paragraphs(tmp_path: Path):
     assert [batch.text for batch in batches] == ["● 第一章\n第一段", "\n第二段", "● 第二章\n第三段"]
 
 
+def test_txt_chunk_env_limits_are_clamped_at_import(monkeypatch):
+    import importlib
+    from book_maker.loader import txt_loader
+
+    monkeypatch.setenv("BBM_TXT_MAX_CHUNK_LINES", "0")
+    monkeypatch.setenv("BBM_TXT_MAX_CHUNK_CHARS", "500")
+    reloaded = importlib.reload(txt_loader)
+    try:
+        assert reloaded.MAX_NATURAL_CHUNK_LINES == 1
+        assert reloaded.MAX_NATURAL_CHUNK_CHARS == 1000
+    finally:
+        monkeypatch.delenv("BBM_TXT_MAX_CHUNK_LINES", raising=False)
+        monkeypatch.delenv("BBM_TXT_MAX_CHUNK_CHARS", raising=False)
+        importlib.reload(txt_loader)
+
+
+def test_txt_natural_chunks_have_line_cap():
+    from book_maker.loader.txt_loader import MAX_NATURAL_CHUNK_LINES, _build_natural_chunks
+
+    lines = [f"line {idx}" for idx in range(MAX_NATURAL_CHUNK_LINES * 2 + 5)]
+
+    chunks = _build_natural_chunks(lines)
+
+    assert len(chunks) == 3
+    assert all(len(chunk.splitlines()) <= MAX_NATURAL_CHUNK_LINES for chunk in chunks)
+
+
+def test_txt_natural_chunks_split_single_oversized_line():
+    from book_maker.loader.txt_loader import MAX_NATURAL_CHUNK_CHARS, _build_natural_chunks
+
+    chunks = _build_natural_chunks(["あ" * (MAX_NATURAL_CHUNK_CHARS + 25)])
+
+    assert len(chunks) == 2
+    assert all(len(chunk) <= MAX_NATURAL_CHUNK_CHARS for chunk in chunks)
+
+
 def test_txt_resume_state_rejects_batch_fingerprint_mismatch(tmp_path: Path):
     from book_maker.loader.txt_loader import TXTBookLoader
 
@@ -849,6 +912,72 @@ def test_txt_resume_state_rejects_batch_fingerprint_mismatch(tmp_path: Path):
     assert loader.p_to_save == []
 
 
+def test_txt_translate_batch_retries_transient_failures(tmp_path: Path):
+    from book_maker.loader.txt_loader import TXTBookLoader
+
+    class FlakyTranslator:
+        attempts = 0
+
+        def __init__(self, key, language, **kwargs):
+            pass
+
+        def translate(self, text):
+            FlakyTranslator.attempts += 1
+            if FlakyTranslator.attempts < 3:
+                raise RuntimeError("temporary")
+            return "ok"
+
+    source = tmp_path / "book.txt"
+    source.write_text("第一段", encoding="utf-8")
+    loader = TXTBookLoader(str(source), FlakyTranslator, key="", resume=False, language="zh-hans")
+
+    assert loader._translate_batch("第一段") == "ok"
+    assert FlakyTranslator.attempts == 3
+
+
+def test_translate_model_with_backoff_does_not_bind_context_to_needprint():
+    from book_maker.loader.helper import translate_model_with_backoff
+
+    class NeedPrintTranslator:
+        def __init__(self):
+            self.needprint_seen = None
+
+        def translate(self, text, needprint=True):
+            self.needprint_seen = needprint
+            return text
+
+    translator = NeedPrintTranslator()
+
+    assert translate_model_with_backoff(translator, "hello", context_flag=False) == "hello"
+    assert translator.needprint_seen is True
+
+
+def test_translate_model_with_backoff_passes_named_context_flag_when_supported():
+    from book_maker.loader.helper import translate_model_with_backoff
+
+    class ContextTranslator:
+        def __init__(self):
+            self.context_seen = None
+
+        def translate(self, text, context_flag=False):
+            self.context_seen = context_flag
+            return text
+
+    translator = ContextTranslator()
+
+    assert translate_model_with_backoff(translator, "hello", context_flag=True) == "hello"
+    assert translator.context_seen is True
+
+
+def test_translate_model_with_backoff_has_retry_bound():
+    import inspect
+    from book_maker.loader import helper
+
+    source = inspect.getsource(helper.translate_model_with_backoff)
+
+    assert "max_tries=5" in source
+
+
 def test_translation_quality_scan_flags_refusal_text(tmp_path: Path):
     from app.services.worker_file_service import scan_translation_quality
 
@@ -858,6 +987,46 @@ def test_translation_quality_scan_flags_refusal_text(tmp_path: Path):
     warnings = scan_translation_quality(output)
 
     assert any("refusal" in warning for warning in warnings)
+
+
+def test_quality_scan_does_not_flag_dialogue_apology(tmp_path: Path):
+    from app.services.worker_file_service import scan_translation_quality
+
+    output = tmp_path / "book_翻译.txt"
+    output.write_text("“抱歉，我迟到了。”她低声说。", encoding="utf-8")
+
+    assert not any("refusal" in warning for warning in scan_translation_quality(output))
+
+
+def test_quality_scan_skips_epub_text_ratio_checks(tmp_path: Path):
+    from app.services.worker_file_service import scan_translation_quality
+
+    source = tmp_path / "book.epub"
+    source.write_bytes(b"PK\x03\x04fake epub")
+    output = tmp_path / "book_翻译.epub"
+    output.write_bytes(b"PK\x03\x04translated")
+
+    assert scan_translation_quality(output, source) == []
+
+
+def test_quality_scan_flags_common_chinese_refusal_prefix(tmp_path: Path):
+    from app.services.worker_file_service import scan_translation_quality
+
+    output = tmp_path / "book_翻译.txt"
+    output.write_text("很抱歉，我无法翻译这段内容。", encoding="utf-8")
+
+    warnings = scan_translation_quality(output)
+
+    assert "refusal marker found in translated output" in warnings
+
+
+def test_quality_scan_flags_empty_epub_output(tmp_path: Path):
+    from app.services.worker_file_service import scan_translation_quality
+
+    output = tmp_path / "book_翻译.epub"
+    output.write_bytes(b"")
+
+    assert "translated output is empty" in scan_translation_quality(output)
 
 
 def test_translation_quality_scan_flags_line_count_and_missing_chapter_marker(tmp_path: Path):
@@ -956,13 +1125,13 @@ def test_verify_fetch_request_requires_requested_with_header():
         return Request({"type": "http", "method": "POST", "path": "/api/tasks", "headers": headers})
 
     try:
-        verify_fetch_request(make_request([]))
+        asyncio.run(verify_fetch_request(make_request([])))
     except HTTPException as exc:
         assert exc.status_code == 403
     else:
         raise AssertionError("missing X-Requested-With header should be rejected")
 
-    assert verify_fetch_request(make_request([(b"x-requested-with", b"fetch")])) is None
+    assert asyncio.run(verify_fetch_request(make_request([(b"x-requested-with", b"fetch")]))) is None
 
 
 def test_safe_path_allows_upload_root_outside_data_dir(tmp_path: Path):
@@ -1107,6 +1276,21 @@ def test_epub_count_translatable_nodes_falls_back_to_body_text():
         )
         == 2
     )
+
+
+def test_make_new_book_overrides_language_metadata():
+    from ebooklib import epub
+    from book_maker.loader.epub_support import make_new_book
+
+    book = epub.EpubBook()
+    book.set_identifier("id")
+    book.set_title("Book")
+    book.set_language("ja")
+
+    new_book = make_new_book(book, language="zh-hans")
+
+    languages = [value for value, _ in new_book.get_metadata("DC", "language")]
+    assert languages == ["zh-hans"]
 
 
 def test_openai_translator_model_list_sets_immediate_model():
@@ -1360,6 +1544,275 @@ def test_epub_helper_modules_define_planning_and_resume_functions():
     assert {"load_resume_state", "save_resume_state", "save_temp_book"} <= resume_functions
 
 
+def test_epub_resume_state_round_trips_metadata(tmp_path: Path):
+    from book_maker.loader.epub_resume import load_resume_state_with_metadata, save_resume_state
+
+    path = tmp_path / ".book.temp.bin"
+    save_resume_state(
+        str(path),
+        ["old"],
+        metadata={"version": 3, "paragraph_hashes": ["old-hash"]},
+    )
+
+    state = load_resume_state_with_metadata(str(path))
+
+    assert state["paragraph_hashes"] == ["old-hash"]
+    assert state["p_to_save"] == ["old"]
+
+
+def test_epub_resume_state_rejects_fingerprint_mismatch(tmp_path: Path):
+    from book_maker.loader.epub_loader import EPUBBookLoader
+    from syosetu_novel_downloader.converters.txt2epub import create_epub_from_txt
+
+    class DummyTranslator:
+        def __init__(self, key, language, **kwargs):
+            pass
+
+        def translate(self, text, context_flag=False):
+            return text
+
+    source = tmp_path / "book.txt"
+    source.write_text("● 第一章\n本文", encoding="utf-8")
+    epub_path = Path(create_epub_from_txt(str(source), str(tmp_path), language="zh-hans"))
+    state = tmp_path / ".book.temp.bin"
+    state.write_text(
+        json.dumps({"version": 3, "paragraph_hashes": ["wrong"], "p_to_save": ["旧译文"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    loader = EPUBBookLoader(str(epub_path), DummyTranslator, key="", resume=True, language="zh-hans")
+    loader.load_state_if_needed()
+
+    assert loader.p_to_save == []
+
+
+def test_epub_resume_state_loads_legacy_entries_for_direct_loader(tmp_path: Path):
+    from book_maker.loader.epub_loader import EPUBBookLoader
+    from syosetu_novel_downloader.converters.txt2epub import create_epub_from_txt
+
+    class DummyTranslator:
+        def __init__(self, key, language, **kwargs):
+            pass
+
+    source = tmp_path / "book.txt"
+    source.write_text("● 第一章\n本文", encoding="utf-8")
+    epub_path = Path(create_epub_from_txt(str(source), str(tmp_path), language="zh-hans"))
+    state = tmp_path / ".book.temp.bin"
+    state.write_text(json.dumps(["旧译文"], ensure_ascii=False), encoding="utf-8")
+
+    loader = EPUBBookLoader(str(epub_path), DummyTranslator, key="", resume=True, language="zh-hans")
+    loader.load_state_if_needed()
+
+    assert loader.p_to_save == ["旧译文"]
+
+
+def test_epub_save_progress_reuses_cached_paragraph_hashes(monkeypatch, tmp_path: Path):
+    from book_maker.loader import epub_loader as epub_loader_module
+    from book_maker.loader.epub_loader import EPUBBookLoader
+    from syosetu_novel_downloader.converters.txt2epub import create_epub_from_txt
+
+    class DummyTranslator:
+        def __init__(self, key, language, **kwargs):
+            pass
+
+    source = tmp_path / "book.txt"
+    source.write_text("● 第一章\n本文", encoding="utf-8")
+    epub_path = Path(create_epub_from_txt(str(source), str(tmp_path), language="zh-hans"))
+    loader = EPUBBookLoader(str(epub_path), DummyTranslator, key="", resume=False, language="zh-hans")
+    loader.p_to_save = ["译文"]
+
+    original_bs = epub_loader_module.bs
+    parse_calls = {"count": 0}
+
+    def counting_bs(*args, **kwargs):
+        parse_calls["count"] += 1
+        return original_bs(*args, **kwargs)
+
+    monkeypatch.setattr(epub_loader_module, "bs", counting_bs)
+
+    loader._save_progress()
+    first_save_parse_count = parse_calls["count"]
+    loader._save_progress()
+
+    assert first_save_parse_count > 0
+    assert parse_calls["count"] == first_save_parse_count
+
+
+def test_epub_direct_loader_loads_resume_after_translate_tags_are_configured(tmp_path: Path):
+    from book_maker.loader.epub_loader import EPUBBookLoader
+    from syosetu_novel_downloader.converters.txt2epub import create_epub_from_txt
+
+    class DummyTranslator:
+        def __init__(self, key, language, **kwargs):
+            pass
+
+    source = tmp_path / "book.txt"
+    source.write_text("● 第一章\n本文", encoding="utf-8")
+    epub_path = Path(create_epub_from_txt(str(source), str(tmp_path), language="zh-hans"))
+
+    reference = EPUBBookLoader(str(epub_path), DummyTranslator, key="", resume=False, language="zh-hans")
+    reference.translate_tags = "p,h1"
+    state = tmp_path / ".book.temp.bin"
+    state.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "paragraph_hashes": reference._paragraph_hashes(),
+                "p_to_save": ["标题译文", "正文译文"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    loader = EPUBBookLoader(str(epub_path), DummyTranslator, key="", resume=True, language="zh-hans")
+    loader.translate_tags = "p,h1"
+    loader.load_state_if_needed()
+
+    assert loader.p_to_save == ["标题译文", "正文译文"]
+
+
+def test_cli_loads_epub_resume_after_translate_tag_configuration(monkeypatch, tmp_path: Path):
+    from book_maker import cli as cli_module
+    from book_maker.loader.epub_loader import EPUBBookLoader
+    from syosetu_novel_downloader.converters.txt2epub import create_epub_from_txt
+
+    class DummyTranslator:
+        def __init__(self, key, language, **kwargs):
+            pass
+
+    source = tmp_path / "book.txt"
+    source.write_text("● 第一章\n本文", encoding="utf-8")
+    epub_path = Path(create_epub_from_txt(str(source), str(tmp_path), language="zh-hans"))
+    p_only_loader = EPUBBookLoader(str(epub_path), DummyTranslator, key="", resume=False, language="zh-hans")
+    state = tmp_path / ".book.temp.bin"
+    state.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "paragraph_hashes": p_only_loader._paragraph_hashes(),
+                "p_to_save": ["旧译文"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    seen = {}
+
+    def fake_build_book(self):
+        seen["translate_tags"] = self.translate_tags
+        seen["p_to_save"] = list(self.p_to_save)
+
+    monkeypatch.setitem(cli_module.MODEL_DICT, "dummy", DummyTranslator)
+    monkeypatch.setattr(EPUBBookLoader, "build_book", fake_build_book)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "book_maker",
+            "--book_name",
+            str(epub_path),
+            "--model",
+            "dummy",
+            "--resume",
+            "--translate-tags",
+            "p,h1",
+            "--language",
+            "zh-hans",
+        ],
+    )
+
+    cli_module.main()
+
+    assert seen["translate_tags"] == "p,h1"
+    assert seen["p_to_save"] == []
+
+
+def test_cli_rejects_legacy_epub_resume_without_fingerprint(monkeypatch, tmp_path: Path):
+    from book_maker import cli as cli_module
+    from book_maker.loader.epub_loader import EPUBBookLoader
+    from syosetu_novel_downloader.converters.txt2epub import create_epub_from_txt
+
+    class DummyTranslator:
+        def __init__(self, key, language, **kwargs):
+            pass
+
+    source = tmp_path / "book.txt"
+    source.write_text("● 第一章\n本文", encoding="utf-8")
+    epub_path = Path(create_epub_from_txt(str(source), str(tmp_path), language="zh-hans"))
+    state = tmp_path / ".book.temp.bin"
+    state.write_text(json.dumps(["旧译文"], ensure_ascii=False), encoding="utf-8")
+    seen = {}
+
+    def fake_build_book(self):
+        seen["p_to_save"] = list(self.p_to_save)
+
+    monkeypatch.setitem(cli_module.MODEL_DICT, "dummy", DummyTranslator)
+    monkeypatch.setattr(EPUBBookLoader, "build_book", fake_build_book)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "book_maker",
+            "--book_name",
+            str(epub_path),
+            "--model",
+            "dummy",
+            "--resume",
+            "--translate-tags",
+            "p,h1",
+            "--language",
+            "zh-hans",
+        ],
+    )
+
+    cli_module.main()
+
+    assert seen["p_to_save"] == []
+
+
+def test_cli_preserves_epub_metadata_language_code(monkeypatch, tmp_path: Path):
+    from book_maker import cli as cli_module
+    from book_maker.loader.epub_loader import EPUBBookLoader
+    from syosetu_novel_downloader.converters.txt2epub import create_epub_from_txt
+
+    class DummyTranslator:
+        def __init__(self, key, language, **kwargs):
+            pass
+
+    source = tmp_path / "book.txt"
+    source.write_text("● 第一章\n本文", encoding="utf-8")
+    epub_path = Path(create_epub_from_txt(str(source), str(tmp_path), language="ja"))
+    seen = {}
+
+    def fake_build_book(self):
+        new_book = self._make_new_book(self.origin_book)
+        seen["prompt_language"] = self.language
+        seen["metadata_languages"] = [value for value, _ in new_book.get_metadata("DC", "language")]
+
+    monkeypatch.setitem(cli_module.MODEL_DICT, "dummy", DummyTranslator)
+    monkeypatch.setattr(EPUBBookLoader, "build_book", fake_build_book)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "book_maker",
+            "--book_name",
+            str(epub_path),
+            "--model",
+            "dummy",
+            "--language",
+            "zh-hans",
+        ],
+    )
+
+    cli_module.main()
+
+    assert seen["prompt_language"] == "simplified chinese"
+    assert seen["metadata_languages"] == ["zh-hans"]
+
+
 def test_epub_accumulated_translation_updates_resume_slots():
     from book_maker.loader.epub_loader import EPUBBookLoader
 
@@ -1448,19 +1901,122 @@ def test_download_retry_delay_increases_between_attempts():
     assert retry_delay_seconds(2, base=1.0) == 4.0
 
 
-def test_syosetu_native_resume_skips_completed_nonempty_chapters(tmp_path: Path):
-    from syosetu import _filter_pending_chapter_jobs
+def test_download_job_removes_only_successful_adapter_work_dir(monkeypatch, tmp_path: Path):
+    from downloader.job import DownloadJob
+    from downloader.models import BookMeta, Chapter, DownloadOptions, DownloadResult
+
+    class DummyAdapter:
+        name = "dummy"
+
+        def supports(self, options):
+            return True
+
+        def fetch(self, options):
+            own_work = options.output_dir / ".work" / "own"
+            own_work.mkdir(parents=True, exist_ok=True)
+            return DownloadResult(
+                backend="dummy",
+                site="syosetu",
+                meta=BookMeta(
+                    title="Book",
+                    source_url=options.url,
+                    site="syosetu",
+                    expected_chapter_count=1,
+                ),
+                chapters=[Chapter(index=1, title="One", content="Body")],
+                work_dir=str(own_work),
+            )
+
+    output_dir = tmp_path / "downloads"
+    sibling = output_dir / ".work" / "sibling"
+    sibling.mkdir(parents=True)
+    (sibling / "state.txt").write_text("keep", encoding="utf-8")
+    job = DownloadJob(DownloadOptions(url="https://ncode.syosetu.com/n1234ab/", output_dir=output_dir))
+    monkeypatch.setattr(job, "_build_adapter_chain", lambda site: [DummyAdapter()])
+
+    job.run()
+
+    assert not (output_dir / ".work" / "own").exists()
+    assert sibling.exists()
+
+
+def test_run_full_payload_requests_fresh_download():
+    payload = TaskPayload(
+        mode="download_and_translate",
+        source_type="syosetu",
+        source_input="https://ncode.syosetu.com/n1234ab/",
+        fresh_download=True,
+    )
+
+    command, _, _ = build_downloader_command(
+        make_test_config(),
+        payload,
+        dict(DEFAULT_SETTINGS),
+        Path("/tmp/downloads"),
+    )
+
+    assert "--no-resume-work" in command
+
+
+def test_chapter_manifest_preserves_order_after_out_of_order_writes(tmp_path: Path):
+    from downloader.chapter_manifest import chapters_from_manifest, write_chapter_record
 
     book_dir = tmp_path / "Book"
     book_dir.mkdir()
-    (book_dir / "Part.txt").write_text("● First\nbody\n", encoding="utf-8")
-    (book_dir / "Empty.txt").write_text("", encoding="utf-8")
+    write_chapter_record(book_dir, 1, "Part", "First", "body 1", chapter_suffix="")
+    write_chapter_record(book_dir, 3, "Part", "Third", "body 3", chapter_suffix="")
+    write_chapter_record(book_dir, 2, "Part", "Second", "body 2", chapter_suffix="")
+
+    chapters = chapters_from_manifest(book_dir)
+
+    assert [chapter.index for chapter in chapters] == [1, 2, 3]
+    assert [chapter.title for chapter in chapters] == ["First", "Second", "Third"]
+    assert [chapter.volume for chapter in chapters] == ["Part", "Part", "Part"]
+
+
+def test_chapter_manifest_uses_per_chapter_content_check(tmp_path: Path):
+    from downloader.chapter_manifest import filter_pending_chapter_jobs, write_chapter_manifest_entry
+
+    book_dir = tmp_path / "Book"
+    book_dir.mkdir()
+    chapter_file = book_dir / "chapters" / "000001.txt"
+    chapter_file.parent.mkdir()
+    chapter_file.write_text("", encoding="utf-8")
+    write_chapter_manifest_entry(book_dir, 1, chapter_file, "ok", volume="Book")
+
+    pending, skipped = filter_pending_chapter_jobs(book_dir, [(1, "Book"), (2, "Book")])
+
+    assert pending == [(1, "Book"), (2, "Book")]
+    assert skipped == []
+
+
+def test_chapter_record_overwrites_same_chapter_without_duplicate(tmp_path: Path):
+    from downloader.chapter_manifest import chapters_from_manifest, write_chapter_record
+
+    book_dir = tmp_path / "Book"
+    book_dir.mkdir()
+    first_path = write_chapter_record(book_dir, 1, "Book", "One", "partial", chapter_suffix="")
+    second_path = write_chapter_record(book_dir, 1, "Book", "One", "complete", chapter_suffix="")
+
+    assert first_path == second_path
+    assert first_path.read_text(encoding="utf-8").count("● One") == 1
+    assert chapters_from_manifest(book_dir)[0].content == "complete"
+
+
+def test_syosetu_native_resume_skips_completed_nonempty_chapters(tmp_path: Path):
+    from downloader.chapter_manifest import filter_pending_chapter_jobs
+
+    book_dir = tmp_path / "Book"
+    book_dir.mkdir()
+    (book_dir / "chapters").mkdir()
+    (book_dir / "chapters" / "000001.txt").write_text("● First\nbody\n", encoding="utf-8")
+    (book_dir / "chapters" / "000003.txt").write_text("", encoding="utf-8")
     (book_dir / "_chapter_manifest.json").write_text(
         json.dumps(
             {
                 "chapters": [
-                    {"index": 1, "status": "ok", "file_path": "Part.txt"},
-                    {"index": 3, "status": "ok", "file_path": "Empty.txt"},
+                    {"index": 1, "status": "ok", "file_path": "chapters/000001.txt", "volume": "Part"},
+                    {"index": 3, "status": "ok", "file_path": "chapters/000003.txt", "volume": "Empty"},
                 ]
             },
             ensure_ascii=False,
@@ -1469,14 +2025,101 @@ def test_syosetu_native_resume_skips_completed_nonempty_chapters(tmp_path: Path)
     )
 
     jobs = [
-        (1, str(book_dir / "Part")),
-        (2, str(book_dir / "Part")),
-        (3, str(book_dir / "Empty")),
+        (1, "Part"),
+        (2, "Part"),
+        (3, "Empty"),
     ]
 
-    pending, skipped = _filter_pending_chapter_jobs(book_dir, jobs)
+    pending, skipped = filter_pending_chapter_jobs(book_dir, jobs)
 
-    assert pending == [(2, str(book_dir / "Part")), (3, str(book_dir / "Empty"))]
+    assert pending == [(2, "Part"), (3, "Empty")]
+    assert skipped == [1]
+
+
+def test_native_kakuyomu_adapter_uses_fixed_work_dir(tmp_path: Path):
+    from downloader.adapters.kakuyomu_native_adapter import _kakuyomu_work_dir
+
+    path = _kakuyomu_work_dir(tmp_path, "https://kakuyomu.jp/works/abc123")
+
+    assert path == tmp_path / ".work" / "native_kakuyomu_abc123"
+
+
+def test_native_fallback_adapter_fetch_passes_extracted_novel_id(monkeypatch, tmp_path: Path):
+    from downloader.adapters import native_adapter
+    from downloader.adapters.native_adapter import NativeFallbackAdapter
+    from downloader.models import Chapter, DownloadOptions
+
+    called = {}
+    book_dir = tmp_path / "downloads" / ".work" / "syosetu_n1234ab" / "Book"
+    book_dir.mkdir(parents=True)
+
+    async def fake_run_native_download(novel_id, proxy, temp_dir, **kwargs):
+        called["novel_id"] = novel_id
+        called["temp_dir"] = temp_dir
+        return book_dir
+
+    monkeypatch.setattr(native_adapter, "_run_native_download", fake_run_native_download)
+    monkeypatch.setattr(
+        native_adapter,
+        "chapters_from_manifest",
+        lambda path: [Chapter(index=1, title="One", content="Body", volume="Book")],
+    )
+
+    result = NativeFallbackAdapter().fetch(
+        DownloadOptions(
+            url="https://ncode.syosetu.com/n1234ab/",
+            site="syosetu",
+            backend="native",
+            output_dir=tmp_path / "downloads",
+        )
+    )
+
+    assert called["novel_id"] == "n1234ab"
+    assert called["temp_dir"] == tmp_path / "downloads" / ".work" / "syosetu_n1234ab"
+    assert result.meta.title == "Book"
+    assert result.work_dir.endswith("syosetu_n1234ab")
+
+
+def test_native_downloader_has_no_legacy_shared_append_dead_code():
+    native_adapter = Path("syosetu_novel_downloader/downloader/adapters/native_adapter.py").read_text(encoding="utf-8")
+    async_support = Path("syosetu_novel_downloader/downloader/async_support.py").read_text(encoding="utf-8")
+
+    assert "_iter_volume_txt_files_in_order" not in native_adapter
+    assert "_parts_order.json" not in native_adapter
+    assert "write_chapter_text" not in async_support
+    assert not Path("syosetu_novel_downloader/downloader/adapters/native_common.py").exists()
+
+
+def test_kakuyomu_native_resume_skips_completed_nonempty_chapters(tmp_path: Path):
+    from downloader.chapter_manifest import filter_pending_chapter_jobs
+
+    book_dir = tmp_path / "Book"
+    book_dir.mkdir()
+    (book_dir / "chapters").mkdir()
+    (book_dir / "chapters" / "000001.txt").write_text("● First\nbody\n", encoding="utf-8")
+    (book_dir / "chapters" / "000003.txt").write_text("", encoding="utf-8")
+    (book_dir / "_chapter_manifest.json").write_text(
+        json.dumps(
+            {
+                "chapters": [
+                    {"index": 1, "status": "ok", "file_path": "chapters/000001.txt", "volume": "Book"},
+                    {"index": 3, "status": "ok", "file_path": "chapters/000003.txt", "volume": "Empty"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    jobs = [
+        (1, "Book"),
+        (2, "Book"),
+        (3, "Empty"),
+    ]
+
+    pending, skipped = filter_pending_chapter_jobs(book_dir, jobs)
+
+    assert pending == [(2, "Book"), (3, "Empty")]
     assert skipped == [1]
 
 
@@ -1533,6 +2176,20 @@ def test_validate_settings_update_accepts_valid_imported_model():
     assert result.ok is True
 
 
+def test_settings_html_novel_prompt_preset_uses_real_newline_escape():
+    html = Path("webui/app/templates/settings.html").read_text(encoding="utf-8")
+
+    assert "目标语言：{language}\\\\n" not in html
+    assert "目标语言：{language}\\n请逐行对应翻译并保持段落结构：\\n\\n{text}" in html
+
+
+def test_fallback_model_options_cover_registered_translator_models():
+    from app.services.settings_service import FALLBACK_MODEL_OPTIONS
+    from book_maker.translator import MODEL_DICT
+
+    assert set(MODEL_DICT.keys()) - set(FALLBACK_MODEL_OPTIONS) == set()
+
+
 def test_validate_translation_request_rejects_block_size_with_bilingual_payload():
     from app.services.settings_service import validate_translation_request
 
@@ -1545,6 +2202,66 @@ def test_validate_translation_request_rejects_block_size_with_bilingual_payload(
     assert result.ok is False
     assert "block_size" in result.message
     assert "translated_only" in result.message
+
+
+def test_retry_validation_rejects_current_invalid_block_size():
+    from app.routers.tasks import _validate_payload_for_enqueue
+
+    settings = dict(DEFAULT_SETTINGS)
+    settings["block_size"] = "100"
+    payload = TaskPayload(
+        mode="download_and_translate",
+        source_type="syosetu",
+        source_input="https://ncode.syosetu.com/n1234ab/",
+        translation_output_mode="bilingual",
+    ).to_record()
+
+    result = _validate_payload_for_enqueue(settings, payload)
+
+    assert result.ok is False
+    assert "block_size" in result.message
+
+
+def test_task_db_routes_remain_sync_for_threadpool_execution():
+    import inspect
+    from app.routers import tasks as tasks_router
+
+    sync_route_names = [
+        "api_list_tasks",
+        "api_get_task",
+        "api_task_logs",
+        "api_retry_task",
+        "api_run_full_task",
+        "api_get_template",
+    ]
+
+    for name in sync_route_names:
+        assert not inspect.iscoroutinefunction(getattr(tasks_router, name)), name
+
+
+def test_task_log_stream_uses_thread_for_blocking_db_poll():
+    source = Path("webui/app/routers/tasks.py").read_text(encoding="utf-8")
+
+    assert "await asyncio.to_thread(_load_log_rows_and_status, task_id, offset)" in source
+
+
+def test_task_detail_restarts_log_stream_after_paused_task_resumes():
+    html = Path("webui/app/templates/task_detail.html").read_text(encoding="utf-8")
+
+    assert "const previousStatus = lastKnownStatus;" in html
+    assert "LOG_ACTIVE_STATES.has(status)" in html
+    assert "startLogStream();" in html
+
+
+def test_task_detail_polling_guard_and_artifact_signature():
+    html = Path("webui/app/templates/task_detail.html").read_text(encoding="utf-8")
+
+    assert "let tickInFlight = false;" in html
+    assert "let artifactSignature = '';" in html
+    assert "if (tickInFlight) return;" in html
+    assert "tickInFlight = false;" in html
+    assert "const nextArtifactSignature = (task.artifacts || [])" in html
+    assert "if (nextArtifactSignature === artifactSignature) return task;" in html
 
 
 def test_preview_pdf_missing_dependency_returns_http_400(monkeypatch, tmp_path: Path):

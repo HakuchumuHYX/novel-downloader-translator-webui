@@ -27,6 +27,7 @@ class DownloadOptions:
     rate_limit: float = 1.0
     retries: int = 2
     timeout: int = 120
+    resume_work: bool = True
 
 
 @dataclass
@@ -56,6 +57,7 @@ class DownloadResult:
     skipped_chapters: int = 0
     skipped_reasons: list[str] = field(default_factory=list)
     raw_metadata_path: str = ""
+    work_dir: str = ""
 
 
 @dataclass

@@ -1,15 +1,15 @@
-import os
 import re
 from asyncio import Semaphore
 from collections.abc import Callable
+from pathlib import Path
 from urllib.parse import urlparse
 
 import aiohttp
 from bs4 import BeautifulSoup  # type: ignore
 
 from custom_typing import ChapterContent, ChapterTitle, NovelTitle
-from downloader.async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
-from downloader.utils import sanitize_filename
+from downloader.async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir
+from downloader.chapter_manifest import filter_pending_chapter_jobs, write_chapter_record
 
 
 class Kakuyomu:
@@ -150,25 +150,48 @@ class Kakuyomu:
 
         return title, content
 
-    async def __async_save_txt(self, title: ChapterTitle, content: ChapterContent, chapter_index: int, file_path: str) -> None:
-        await write_chapter_text(file_path, str(title), str(content), chapter_suffix=f"[第{chapter_index}話]")
+    async def __async_save_txt(self, title: ChapterTitle, content: ChapterContent, chapter_index: int, book_dir: str) -> None:
+        write_chapter_record(
+            Path(book_dir),
+            int(chapter_index),
+            str(self.novel_title),
+            str(title),
+            str(content),
+            chapter_suffix=f"[第{chapter_index}話]",
+        )
 
-    async def async_fetch(self, chapter_index: int, episode_url: str, file_path: str) -> tuple[int, str, ChapterTitle, ChapterContent]:
+    async def async_fetch(self, chapter_index: int, episode_url: str) -> tuple[int, ChapterTitle, ChapterContent]:
         async with self.__semaphore:
             title, content = await self.__get_chapter_title_content(episode_url)
-            return chapter_index, file_path, title, content
+            return chapter_index, title, content
 
     async def async_download(self, output_dir: str) -> None:
-        output_dir = prepare_output_dir(output_dir, self.novel_title)
+        output_dir = prepare_output_dir(output_dir, self.novel_title, clean=False)
 
         self.total_chapters = len(self.__episode_urls)
+        downloaded = 0
+        jobs = [
+            (idx, str(self.novel_title))
+            for idx, _ in enumerate(self.__episode_urls, start=1)
+        ]
+        jobs, skipped = filter_pending_chapter_jobs(output_dir, jobs)
+        downloaded += len(skipped)
+        if self.progress_callback:
+            self.progress_callback(downloaded, self.total_chapters)
+        if not jobs:
+            return
+
+        def _on_progress(current: int, _: int) -> None:
+            if self.progress_callback:
+                self.progress_callback(downloaded + current, self.total_chapters)
+
         results = await collect_results(
             [
-                self.async_fetch(idx, episode_url, os.path.join(output_dir, sanitize_filename(self.novel_title)))
-                for idx, episode_url in enumerate(self.__episode_urls, start=1)
+                self.async_fetch(idx, self.__episode_urls[idx - 1])
+                for idx, _volume in jobs
             ],
-            total=self.total_chapters,
-            progress_callback=self.progress_callback,
+            total=len(jobs),
+            progress_callback=_on_progress,
         )
-        for chapter_index, file_path, title, content in sorted(results, key=lambda item: item[0]):
-            await self.__async_save_txt(title, content, chapter_index, file_path)
+        for chapter_index, title, content in sorted(results, key=lambda item: item[0]):
+            await self.__async_save_txt(title, content, chapter_index, output_dir)

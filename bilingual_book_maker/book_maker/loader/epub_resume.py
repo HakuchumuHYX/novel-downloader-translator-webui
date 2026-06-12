@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import pickle
 from copy import copy
+from pathlib import Path
 
 from bs4 import BeautifulSoup as bs
 from bs4.element import NavigableString
@@ -26,13 +28,30 @@ def load_resume_state(path: str) -> list[str]:
     raise Exception("can not load resume file")
 
 
-def save_resume_state(path: str, entries: list[str]) -> None:
-    save_resume_entries(path, entries, mode="json", atomic=True)
+def load_resume_state_with_metadata(path: str) -> dict:
+    target = Path(path)
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("p_to_save"), list):
+            return data
+        if isinstance(data, list):
+            return {"version": 1, "p_to_save": [str(item) for item in data]}
+    except Exception:
+        entries = load_resume_state(path)
+        return {"version": 1, "p_to_save": entries}
+    return {"version": 1, "p_to_save": []}
+
+
+def save_resume_state(path: str, entries: list[str], metadata: dict | None = None) -> None:
+    save_resume_entries(path, entries, mode="json", atomic=True, metadata=metadata)
 
 
 def save_temp_book(loader) -> None:
     origin_book_temp = epub.read_epub(loader.epub_name)
-    new_temp_book = make_new_book(origin_book_temp)
+    new_temp_book = make_new_book(
+        origin_book_temp,
+        language=getattr(loader, "metadata_language", getattr(loader, "language", None)),
+    )
     p_to_save_len = len(loader.p_to_save)
     trans_taglist = loader.translate_tags.split(",")
     index = 0

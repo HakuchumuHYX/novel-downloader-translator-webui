@@ -46,7 +46,7 @@ def decrypt_text(cipher_text: str) -> str:
     return get_fernet().decrypt(token).decode("utf-8")
 
 
-def verify_basic_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
+async def verify_basic_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     cfg = get_config()
     valid_user = hmac.compare_digest(credentials.username, cfg.basic_auth_user)
     valid_pass = hmac.compare_digest(credentials.password, cfg.basic_auth_password)
@@ -59,7 +59,7 @@ def verify_basic_auth(credentials: HTTPBasicCredentials = Depends(security)) -> 
     return credentials.username
 
 
-def verify_fetch_request(request: Request) -> None:
+async def verify_fetch_request(request: Request) -> None:
     if request.headers.get("x-requested-with", "").strip().lower() != "fetch":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

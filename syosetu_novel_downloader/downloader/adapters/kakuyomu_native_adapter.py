@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
-import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from kakuyomu import Kakuyomu
 
+from ..chapter_manifest import chapters_from_manifest
 from ..models import BookMeta, DownloadOptions, DownloadResult
-from ..utils import detect_site_from_url, emit_progress
+from ..utils import detect_site_from_url, emit_progress, sanitize_filename
 from .base import BackendAdapter
-from .native_common import chapters_from_txt_files
 
 
 class NativeKakuyomuAdapter(BackendAdapter):
@@ -20,12 +19,16 @@ class NativeKakuyomuAdapter(BackendAdapter):
         site = options.site if options.site != "auto" else detect_site_from_url(options.url)
         return site == "kakuyomu"
 
+    def work_dir(self, options: DownloadOptions) -> Path:
+        return _kakuyomu_work_dir(options.output_dir, options.url)
+
     def fetch(self, options: DownloadOptions) -> DownloadResult:
         site = options.site if options.site != "auto" else detect_site_from_url(options.url)
         if site != "kakuyomu":
             raise RuntimeError("Native kakuyomu adapter supports kakuyomu only")
 
-        temp_dir = Path(tempfile.mkdtemp(prefix="_native_kakuyomu_", dir=options.output_dir))
+        temp_dir = self.work_dir(options)
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             book_dir = asyncio.run(
@@ -37,8 +40,7 @@ class NativeKakuyomuAdapter(BackendAdapter):
                 )
             )
 
-            txt_files = sorted(book_dir.glob("*.txt"))
-            chapters = chapters_from_txt_files(book_dir, txt_files, strip_index_suffix=True)
+            chapters = chapters_from_manifest(book_dir, strip_index_suffix=True)
 
             if not chapters:
                 raise RuntimeError("Native kakuyomu downloader produced no chapter content")
@@ -55,10 +57,22 @@ class NativeKakuyomuAdapter(BackendAdapter):
                 site=site,
                 meta=meta,
                 chapters=chapters,
+                work_dir=str(temp_dir),
             )
         finally:
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            pass
+
+
+def _kakuyomu_work_dir(output_dir: Path, url: str) -> Path:
+    parts = [part for part in urlparse(str(url or "")).path.split("/") if part]
+    work_id = ""
+    if "works" in parts:
+        index = parts.index("works")
+        if index + 1 < len(parts):
+            work_id = parts[index + 1]
+    if not work_id and parts:
+        work_id = parts[-1]
+    return output_dir / ".work" / f"native_kakuyomu_{sanitize_filename(work_id, default='kakuyomu')}"
 
 
 async def _run_native_kakuyomu_download(

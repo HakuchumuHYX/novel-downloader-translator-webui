@@ -70,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rate-limit", type=float, default=1.0, help="Delay between backend calls/retries (seconds)")
     parser.add_argument("--retries", type=int, default=2, help="Retry count per backend")
     parser.add_argument("--timeout", type=int, default=120, help="Command/request timeout in seconds")
+    parser.add_argument(
+        "--no-resume-work",
+        action="store_true",
+        help="Discard this URL's downloader work directory before running.",
+    )
     return parser
 
 
@@ -98,6 +103,7 @@ def build_download_options(args: argparse.Namespace) -> DownloadOptions:
         rate_limit=max(0.0, args.rate_limit),
         retries=max(0, args.retries),
         timeout=max(1, args.timeout),
+        resume_work=not bool(getattr(args, "no_resume_work", False)),
     )
 
 

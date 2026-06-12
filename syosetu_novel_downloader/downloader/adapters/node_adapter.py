@@ -21,12 +21,16 @@ class NodeNovelAdapter(BackendAdapter):
         site = options.site if options.site != "auto" else detect_site_from_url(options.url)
         return site in {"syosetu", "novel18", "kakuyomu"}
 
+    def work_dir(self, options: DownloadOptions) -> Path:
+        site = options.site if options.site != "auto" else detect_site_from_url(options.url)
+        work_id = sanitize_filename(options.url, default="novel")
+        return options.output_dir / ".work" / f"node_{site}_{work_id}"
+
     def fetch(self, options: DownloadOptions) -> DownloadResult:
         site = options.site if options.site != "auto" else detect_site_from_url(options.url)
         site_id = "kakuyomu" if site == "kakuyomu" else "syosetu"
 
-        work_id = sanitize_filename(options.url, default="novel")
-        temp_dir = options.output_dir / ".work" / f"node_{site}_{work_id}"
+        temp_dir = self.work_dir(options)
         temp_dir.mkdir(parents=True, exist_ok=True)
         cookie_temp_file: Path | None = None
         cookie_temp_dir: Path | None = None
@@ -171,6 +175,7 @@ class NodeNovelAdapter(BackendAdapter):
                 skipped_chapters=skipped,
                 skipped_reasons=skipped_reasons,
                 raw_metadata_path=str(metadata_json) if metadata_json else "",
+                work_dir=str(temp_dir),
             )
         finally:
             if cookie_temp_file and cookie_temp_file.exists():

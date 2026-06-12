@@ -1,5 +1,6 @@
 import re
 import backoff
+import inspect
 import logging
 from copy import copy
 
@@ -7,6 +8,30 @@ from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+@backoff.on_exception(
+    backoff.expo,
+    Exception,
+    max_tries=5,
+    on_backoff=lambda details: logger.warning(f"retry backoff: {details}"),
+    on_giveup=lambda details: logger.warning(f"retry abort: {details}"),
+    jitter=None,
+)
+def translate_model_with_backoff(translate_model, text, context_flag=False):
+    translate = translate_model.translate
+    try:
+        signature = inspect.signature(translate)
+    except (TypeError, ValueError):
+        return translate(text)
+    parameters = signature.parameters
+    accepts_context_flag = "context_flag" in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    if accepts_context_flag:
+        return translate(text, context_flag=context_flag)
+    return translate(text)
 
 
 def _soup_root(node) -> BeautifulSoup | None:
@@ -54,15 +79,8 @@ class EPUBBookLoaderHelper:
         if single_translate:
             p.extract()
 
-    @backoff.on_exception(
-        backoff.expo,
-        Exception,
-        on_backoff=lambda details: logger.warning(f"retry backoff: {details}"),
-        on_giveup=lambda details: logger.warning(f"retry abort: {details}"),
-        jitter=None,
-    )
     def translate_with_backoff(self, text, context_flag=False):
-        return self.translate_model.translate(text, context_flag)
+        return translate_model_with_backoff(self.translate_model, text, context_flag)
 
     def deal_new(self, p, wait_p_list, single_translate=False):
         self.deal_old(wait_p_list, single_translate, self.context_flag)

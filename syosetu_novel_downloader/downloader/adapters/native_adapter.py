@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 from syosetu import Syosetu
 
-from ..models import BookMeta, Chapter, DownloadOptions, DownloadResult
-from ..utils import detect_site_from_url, emit_progress, extract_syosetu_novel_id, is_content_txt, sanitize_filename
+from ..chapter_manifest import chapters_from_manifest
+from ..models import BookMeta, DownloadOptions, DownloadResult
+from ..utils import detect_site_from_url, emit_progress, extract_syosetu_novel_id
 from .base import BackendAdapter
-from .native_common import parse_native_volume_txt
 
 
 class NativeFallbackAdapter(BackendAdapter):
@@ -23,6 +22,11 @@ class NativeFallbackAdapter(BackendAdapter):
             return False
         return True
 
+    def work_dir(self, options: DownloadOptions) -> Path:
+        site = options.site if options.site != "auto" else detect_site_from_url(options.url)
+        novel_id = extract_syosetu_novel_id(options.url)
+        return options.output_dir / ".work" / f"{site}_{novel_id}"
+
     def fetch(self, options: DownloadOptions) -> DownloadResult:
         site = options.site if options.site != "auto" else detect_site_from_url(options.url)
         if site not in {"syosetu", "novel18"}:
@@ -30,9 +34,9 @@ class NativeFallbackAdapter(BackendAdapter):
         if options.paid_policy != "skip":
             raise RuntimeError("Native fallback does not support paid_policy other than skip")
 
-        novel_id = extract_syosetu_novel_id(options.url)
-        temp_dir = options.output_dir / ".work" / f"{site}_{novel_id}"
+        temp_dir = self.work_dir(options)
         temp_dir.mkdir(parents=True, exist_ok=True)
+        novel_id = extract_syosetu_novel_id(options.url)
 
         try:
             if site == "novel18":
@@ -58,22 +62,7 @@ class NativeFallbackAdapter(BackendAdapter):
                     )
                 )
 
-            chapters: list[Chapter] = []
-            chapter_index = 1
-            for txt in _iter_volume_txt_files_in_order(book_dir):
-                volume_name = txt.stem
-                sections = parse_native_volume_txt(txt)
-                for title, content in sections:
-                    chapters.append(
-                        Chapter(
-                            index=chapter_index,
-                            title=title,
-                            content=content,
-                            volume=volume_name,
-                            source_path=str(txt.relative_to(book_dir)),
-                        )
-                    )
-                    chapter_index += 1
+            chapters = chapters_from_manifest(book_dir)
 
             if not chapters:
                 raise RuntimeError("Native downloader produced no chapter content")
@@ -90,6 +79,7 @@ class NativeFallbackAdapter(BackendAdapter):
                 site=site,
                 meta=meta,
                 chapters=chapters,
+                work_dir=str(temp_dir),
             )
         finally:
             pass
@@ -117,45 +107,8 @@ async def _run_native_download(
     )
     await syosetu.async_init()
     try:
-        part_titles = await syosetu.get_novel_part_titles()
         book_dir = Path(await syosetu.async_download(str(temp_dir)))
     finally:
         await syosetu.async_close()
-    if part_titles:
-        order_file = book_dir / "_parts_order.json"
-        order_file.write_text(
-            json.dumps([sanitize_filename(title) for title in part_titles], ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
 
     return book_dir
-
-
-def _iter_volume_txt_files_in_order(book_dir: Path) -> list[Path]:
-    txt_files = [p for p in book_dir.glob("*.txt") if is_content_txt(p)]
-
-    order_file = book_dir / "_parts_order.json"
-    if not order_file.exists():
-        return sorted(txt_files)
-
-    try:
-        part_titles = json.loads(order_file.read_text(encoding="utf-8"))
-    except Exception:
-        return sorted(txt_files)
-
-    if not isinstance(part_titles, list) or not part_titles:
-        return sorted(txt_files)
-
-    order_map = {
-        str(title): idx for idx, title in enumerate(part_titles) if isinstance(title, str)
-    }
-    if not order_map:
-        return sorted(txt_files)
-
-    def _sort_key(path: Path) -> tuple[int, int, str]:
-        idx = order_map.get(path.stem)
-        if idx is None:
-            return (1, 10**9, path.name)
-        return (0, idx, path.name)
-
-    return sorted(txt_files, key=_sort_key)

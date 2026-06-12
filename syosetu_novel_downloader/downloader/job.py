@@ -40,6 +40,7 @@ class DownloadJob:
             last_error = None
             for attempt in range(1, self.options.retries + 2):
                 try:
+                    self._clear_adapter_work_dir(adapter, site)
                     result = adapter.fetch(self.options)
                     break
                 except Exception as exc:  # noqa: BLE001
@@ -92,8 +93,23 @@ class DownloadJob:
             finished=finished,
         )
         write_manifest(output_book_dir / "manifest.json", manifest.__dict__)
+        if result.work_dir:
+            work_dir = Path(result.work_dir)
+            try:
+                work_dir.relative_to(self.options.output_dir / ".work")
+            except ValueError:
+                pass
+            else:
+                shutil.rmtree(work_dir, ignore_errors=True)
 
         return result, output_book_dir
+
+    def _clear_adapter_work_dir(self, adapter, site: str) -> None:
+        if self.options.resume_work:
+            return
+        if hasattr(adapter, "work_dir"):
+            work_dir = adapter.work_dir(self.options)
+            shutil.rmtree(work_dir, ignore_errors=True)
 
     def _build_adapter_chain(self, site: str):
         if self.options.backend == "node":

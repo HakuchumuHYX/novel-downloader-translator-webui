@@ -18,6 +18,7 @@ from ..services.task_service import (
     create_or_update_cookie_profile,
     delete_cookie_profile,
     detach_cookie_profile_from_non_running_tasks,
+    get_cookie_profile,
     get_cookie_profile_for_edit,
 )
 
@@ -116,19 +117,33 @@ async def api_create_cookie_profile(
     if not site:
         site = "custom"
 
-    if not name or not cookie_value:
-        raise HTTPException(status_code=400, detail="name and cookie are required (cookie text or json file)")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
 
-    if not encryption_configured():
-        raise HTTPException(
-            status_code=400,
-            detail="WEBUI_SECRET_KEY 未配置：Cookie 配置只能在启用有效密钥后保存。",
-        )
+    existing_cookie_enc = ""
+    if profile_id and not cookie_value:
+        with get_conn() as conn:
+            existing = get_cookie_profile(conn, profile_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="cookie profile not found")
+        existing_cookie_enc = str(existing["cookie_enc"])
 
-    try:
-        cookie_enc = encrypt_text(cookie_value)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"invalid WEBUI_SECRET_KEY: {exc}") from exc
+    if not cookie_value and not existing_cookie_enc:
+        raise HTTPException(status_code=400, detail="cookie is required (cookie text or json file)")
+
+    if cookie_value:
+        if not encryption_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="WEBUI_SECRET_KEY 未配置：Cookie 配置只能在启用有效密钥后保存。",
+            )
+
+        try:
+            cookie_enc = encrypt_text(cookie_value)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid WEBUI_SECRET_KEY: {exc}") from exc
+    else:
+        cookie_enc = existing_cookie_enc
 
     with get_conn() as conn:
         try:

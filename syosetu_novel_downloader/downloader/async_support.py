@@ -7,8 +7,6 @@ from asyncio import as_completed, create_task
 from collections.abc import Awaitable, Callable, Iterable
 from typing import TypeVar
 
-import aiofiles
-
 from downloader.utils import sanitize_filename
 
 
@@ -26,15 +24,6 @@ def prepare_output_dir(output_dir: str, title: str, *, clean: bool = True) -> st
         shutil.rmtree(path)
     os.makedirs(path, exist_ok=True)
     return path
-
-
-async def write_chapter_text(file_path: str, title: str, content: str, *, chapter_suffix: str = "") -> None:
-    async with aiofiles.open(f"{file_path}.txt", "a+", encoding="utf-8") as file_obj:
-        header = f"● {title}"
-        if chapter_suffix:
-            header = f"{header} {chapter_suffix}"
-        await file_obj.write(f"{header}\n")
-        await file_obj.write(f"{content}\n")
 
 
 async def collect_results(

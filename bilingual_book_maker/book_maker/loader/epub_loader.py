@@ -1,3 +1,4 @@
+import hashlib
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,7 +25,7 @@ from .epub_parallel import (
     translate_with_chapter_context,
 )
 from .epub_plan import build_chapter_plan, total_paragraph_count
-from .epub_resume import load_resume_state, save_resume_state, save_temp_book
+from .epub_resume import load_resume_state_with_metadata, save_resume_state, save_temp_book
 from .epub_support import (
     extract_paragraph,
     collect_translatable_nodes,
@@ -54,9 +55,14 @@ class EPUBBookLoader(BaseBookLoader):
         temperature=1.0,
         source_lang="auto",
         parallel_workers=5,
+        defer_resume_load=False,
+        metadata_language=None,
+        strict_resume_fingerprint=False,
     ):
         self.epub_name = epub_name
         self.new_epub = epub.EpubBook()
+        self.language = language
+        self.metadata_language = metadata_language or language
         self._translator_model_cls = model
         self._translator_init_args = (key, language)
         self._translator_init_kwargs = {
@@ -109,11 +115,13 @@ class EPUBBookLoader(BaseBookLoader):
             install_epub_spine_fallback_patch()
             self.origin_book = epub.read_epub(self.epub_name)
 
+        self._cached_paragraph_hashes: list[str] | None = None
+        self._cached_paragraph_hash_key: tuple[str, str, str, bool] | None = None
         self.p_to_save = []
         self.resume = resume
+        self.strict_resume_fingerprint = strict_resume_fingerprint
+        self._resume_loaded = False
         self.bin_path = f"{Path(epub_name).parent}/.{Path(epub_name).stem}.temp.bin"
-        if self.resume:
-            self.load_state()
 
     def _create_translator_instance(self):
         return self._translator_model_cls(
@@ -121,8 +129,40 @@ class EPUBBookLoader(BaseBookLoader):
             **self._translator_init_kwargs,
         )
 
+    def _paragraph_hash_config_key(self) -> tuple[str, str, str, bool]:
+        return (
+            self.translate_tags,
+            self.only_filelist,
+            self.exclude_filelist,
+            bool(self.allow_navigable_strings),
+        )
+
+    def _paragraph_hashes(self) -> list[str]:
+        cache_key = self._paragraph_hash_config_key()
+        if self._cached_paragraph_hash_key == cache_key and self._cached_paragraph_hashes is not None:
+            return list(self._cached_paragraph_hashes)
+
+        hashes: list[str] = []
+        trans_taglist = self.translate_tags.split(",")
+        for item in self.origin_book.get_items_of_type(ITEM_DOCUMENT):
+            if not should_translate_item(item, self.only_filelist, self.exclude_filelist):
+                continue
+            soup = bs(item.content, "html.parser")
+            for node in collect_translatable_nodes(
+                soup,
+                trans_taglist,
+                allow_navigable_strings=self.allow_navigable_strings,
+            ):
+                text = node_text(node)
+                if not text or is_special_text(text):
+                    continue
+                hashes.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
+        self._cached_paragraph_hash_key = cache_key
+        self._cached_paragraph_hashes = list(hashes)
+        return hashes
+
     def _make_new_book(self, book):
-        return make_new_book(book)
+        return make_new_book(book, language=self.metadata_language)
 
     def _process_paragraph(self, p, new_p, index, p_to_save_len, thread_safe=False):
         if self._is_saved_index(index):
@@ -603,6 +643,7 @@ class EPUBBookLoader(BaseBookLoader):
             self.translation_style,
             self.context_flag,
         )
+        self.load_state_if_needed()
         self.batch_init_then_wait()
         new_book = self._make_new_book(self.origin_book)
         all_items = list(self.origin_book.get_items())
@@ -761,10 +802,29 @@ class EPUBBookLoader(BaseBookLoader):
             raise
 
     def load_state(self):
-        self.p_to_save = load_resume_state(self.bin_path)
+        state = load_resume_state_with_metadata(self.bin_path)
+        paragraph_hashes = state.get("paragraph_hashes")
+        if (
+            (paragraph_hashes is None and self.strict_resume_fingerprint)
+            or (paragraph_hashes is not None and paragraph_hashes != self._paragraph_hashes())
+        ):
+            print("warning: resume state paragraph layout changed; ignoring old EPUB resume state")
+            self.p_to_save = []
+            self._resume_loaded = True
+            return
+        self.p_to_save = [str(item) for item in state.get("p_to_save", [])]
+        self._resume_loaded = True
+
+    def load_state_if_needed(self):
+        if self.resume and not self._resume_loaded:
+            self.load_state()
 
     def _save_temp_book(self):
         save_temp_book(self)
 
     def _save_progress(self):
-        save_resume_state(self.bin_path, self.p_to_save)
+        save_resume_state(
+            self.bin_path,
+            self.p_to_save,
+            metadata={"version": 3, "paragraph_hashes": self._paragraph_hashes()},
+        )

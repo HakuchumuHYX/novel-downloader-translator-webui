@@ -52,7 +52,7 @@ def fix_toc_uids(toc, counter=None):
     return fixed_toc
 
 
-def make_new_book(book):
+def make_new_book(book, language: str | None = None):
     new_book = epub.EpubBook()
     allowed_ns = set(epub.NAMESPACES.keys()) | set(epub.NAMESPACES.values())
 
@@ -79,12 +79,16 @@ def make_new_book(book):
                 others = None
             else:
                 continue
+            if language and name == "language":
+                continue
 
             if others:
                 new_book.add_metadata(namespace, name, value, others)
             else:
                 new_book.add_metadata(namespace, name, value)
 
+    if language:
+        new_book.set_language(language)
     new_book.spine = book.spine
     new_book.toc = fix_toc_uids(book.toc)
     return new_book

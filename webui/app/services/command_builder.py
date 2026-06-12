@@ -62,6 +62,9 @@ def build_downloader_command(
     if payload.record_chapter_number:
         command.append("--record-chapter-number")
 
+    if payload.fresh_download:
+        command.append("--no-resume-work")
+
     command.extend(["--url", payload.source_input.strip()])
 
     extra_env: dict[str, str] = {}

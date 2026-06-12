@@ -1,5 +1,3 @@
-import json
-import os
 import re
 from asyncio import Semaphore, gather
 from collections.abc import Callable
@@ -10,94 +8,11 @@ import aiohttp
 from bs4 import BeautifulSoup  # type: ignore
 
 from custom_typing import ChapterContent, ChapterRange, ChapterTitle, NovelTitle, PartTitle
-from downloader.async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir, write_chapter_text
-from downloader.utils import sanitize_filename
+from downloader.async_support import DEFAULT_HEADERS, collect_results, prepare_output_dir
+from downloader.chapter_manifest import filter_pending_chapter_jobs, write_chapter_record
 
 
 MAIN_URL: str = "https://ncode.syosetu.com"
-CHAPTER_MANIFEST_NAME = "_chapter_manifest.json"
-
-
-def _chapter_output_path(file_path: str) -> Path:
-    return Path(f"{file_path}.txt")
-
-
-def _relative_output_file_path(book_dir: Path, file_path: str) -> str:
-    output_path = _chapter_output_path(file_path)
-    try:
-        return str(output_path.relative_to(book_dir))
-    except ValueError:
-        return output_path.name
-
-
-def _load_chapter_manifest(book_dir: Path) -> dict[int, dict[str, str]]:
-    manifest_path = book_dir / CHAPTER_MANIFEST_NAME
-    try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-    chapters = raw.get("chapters")
-    if not isinstance(chapters, list):
-        return {}
-
-    entries: dict[int, dict[str, str]] = {}
-    for entry in chapters:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            chapter_index = int(entry.get("index"))
-        except (TypeError, ValueError):
-            continue
-        entries[chapter_index] = {
-            "status": str(entry.get("status") or ""),
-            "file_path": str(entry.get("file_path") or ""),
-        }
-    return entries
-
-
-def _write_chapter_manifest_entry(book_dir: Path, chapter_index: int, file_path: str, status: str) -> None:
-    entries = _load_chapter_manifest(book_dir)
-    entries[int(chapter_index)] = {
-        "status": status,
-        "file_path": _relative_output_file_path(book_dir, file_path),
-    }
-    payload = {
-        "version": 1,
-        "chapters": [
-            {"index": index, **entry}
-            for index, entry in sorted(entries.items())
-        ],
-    }
-    (book_dir / CHAPTER_MANIFEST_NAME).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def _chapter_output_has_content(book_dir: Path, file_path: str) -> bool:
-    path = Path(file_path)
-    if not path.is_absolute():
-        path = book_dir / path
-    return path.is_file() and bool(path.read_text(encoding="utf-8", errors="ignore").strip())
-
-
-def _filter_pending_chapter_jobs(book_dir: str | Path, jobs: list[tuple[int, str]]) -> tuple[list[tuple[int, str]], list[int]]:
-    book_path = Path(book_dir)
-    entries = _load_chapter_manifest(book_path)
-    pending: list[tuple[int, str]] = []
-    skipped: list[int] = []
-
-    for chapter_index, file_path in jobs:
-        entry = entries.get(int(chapter_index), {})
-        status = str(entry.get("status") or "").lower()
-        entry_path = str(entry.get("file_path") or _relative_output_file_path(book_path, file_path))
-        if status in {"ok", "completed"} and _chapter_output_has_content(book_path, entry_path):
-            skipped.append(chapter_index)
-            continue
-        pending.append((chapter_index, file_path))
-
-    return pending, skipped
 
 
 class Syosetu:
@@ -280,15 +195,21 @@ class Syosetu:
         content = content_node.text.replace("\u3000", "")
         return title, content
 
-    async def __async_save_txt(self, title: ChapterTitle | PartTitle, content: ChapterContent, chapter_index, file_path: str) -> None:
+    async def __async_save_txt(
+        self,
+        title: ChapterTitle | PartTitle,
+        content: ChapterContent,
+        chapter_index,
+        book_dir: str,
+        volume: str,
+    ) -> None:
         chapter_suffix = f"[総第{chapter_index}話]" if self.record_chapter_index else ""
-        await write_chapter_text(file_path, str(title), str(content), chapter_suffix=chapter_suffix)
-        _write_chapter_manifest_entry(_chapter_output_path(file_path).parent, int(chapter_index), file_path, "ok")
+        write_chapter_record(Path(book_dir), int(chapter_index), str(volume), str(title), str(content), chapter_suffix=chapter_suffix)
 
-    async def async_fetch(self, chapter_index: int, file_path: str) -> tuple[int, str, ChapterTitle, ChapterContent]:
+    async def async_fetch(self, chapter_index: int, volume: str) -> tuple[int, str, ChapterTitle, ChapterContent]:
         async with self.__semaphore:
             title, content = await self.__get_chapter_title_content(chapter_index)
-            return chapter_index, file_path, title, content
+            return chapter_index, volume, title, content
 
     async def async_download(self, output_dir) -> str:
         output_dir = prepare_output_dir(output_dir, self.novel_title, clean=False)
@@ -307,7 +228,7 @@ class Syosetu:
 
         async def _run_jobs(jobs):
             nonlocal downloaded
-            jobs, skipped = _filter_pending_chapter_jobs(output_dir, list(jobs))
+            jobs, skipped = filter_pending_chapter_jobs(output_dir, list(jobs))
             downloaded += len(skipped)
             if self.progress_callback and skipped:
                 self.progress_callback(downloaded, self.total_chapters)
@@ -319,23 +240,23 @@ class Syosetu:
                     self.progress_callback(downloaded + current, self.total_chapters)
 
             results = await collect_results(
-                [self.async_fetch(chapter_index, file_path) for chapter_index, file_path in jobs],
+                [self.async_fetch(chapter_index, volume) for chapter_index, volume in jobs],
                 total=len(jobs),
                 progress_callback=_on_progress,
             )
             downloaded += len(results)
-            for chapter_index, file_path, title, content in sorted(results, key=lambda item: item[0]):
-                await self.__async_save_txt(title, content, chapter_index, file_path)
+            for chapter_index, volume, title, content in sorted(results, key=lambda item: item[0]):
+                await self.__async_save_txt(title, content, chapter_index, output_dir, volume)
 
         if len(parts) != 0:
             for k, v in parts.items():
                 print(f"Start download part: {k}")
-                await _run_jobs([(chapter_index, os.path.join(output_dir, sanitize_filename(k))) for chapter_index in v])
+                await _run_jobs([(chapter_index, str(k)) for chapter_index in v])
         else:
             print(f"Start download novel: {self.novel_title}")
             await _run_jobs(
                 [
-                    (chapter_index, os.path.join(output_dir, sanitize_filename(self.novel_title)))
+                    (chapter_index, str(self.novel_title))
                     for chapter_index in self.__get_chapters_range()
                 ]
             )

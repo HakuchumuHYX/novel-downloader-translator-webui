@@ -69,6 +69,14 @@ def _load_log_rows_and_status(task_id: int, offset: int) -> tuple[list[Any], str
         return rows, str(row["status"])
 
 
+def _validate_payload_for_enqueue(settings: dict[str, str], payload: dict[str, Any]):
+    payload_validation = validate_task_payload(payload)
+    if not payload_validation.ok:
+        return payload_validation
+    effective_settings = merged_settings(settings, payload.get("settings_overrides", {}))
+    return validate_translation_request(effective_settings, payload)
+
+
 @router.post("/api/tasks")
 async def api_create_task(
     request: Request,
@@ -136,8 +144,7 @@ async def api_create_task(
 
         with get_conn() as conn:
             base_settings = load_settings(conn)
-            effective_settings = merged_settings(base_settings, task_payload.get("settings_overrides", {}))
-            settings_validation = validate_translation_request(effective_settings, task_payload)
+            settings_validation = _validate_payload_for_enqueue(base_settings, task_payload)
             if not settings_validation.ok:
                 raise HTTPException(status_code=400, detail=settings_validation.message)
 
@@ -383,9 +390,6 @@ async def api_task_logs_stream(
         yield ": ok\n\n"
 
         while True:
-            if await request.is_disconnected():
-                break
-
             rows, status = await asyncio.to_thread(_load_log_rows_and_status, task_id, offset)
 
             if rows:
@@ -427,6 +431,9 @@ def api_retry_task(
             raise HTTPException(status_code=404, detail="Task not found")
         payload = load_task_payload(row)
         validate_retry_source_available(payload)
+        validation = _validate_payload_for_enqueue(load_settings(conn), payload)
+        if not validation.ok:
+            raise HTTPException(status_code=400, detail=validation.message)
         new_id = create_task(conn, payload, parent_task_id=task_id)
     return JSONResponse({"ok": True, "task_id": new_id})
 
@@ -445,6 +452,7 @@ def api_run_full_task(
         payload = load_task_payload(row)
         payload["mode"] = "download_and_translate"
         payload["translate_mode"] = "full"
+        payload["fresh_download"] = True
 
         reused_source = False
         source_path_raw = str(row["source_output_path"] or "").strip()
@@ -460,6 +468,9 @@ def api_run_full_task(
         validation = validate_task_payload(payload)
         if not validation.ok:
             raise HTTPException(status_code=400, detail=validation.message)
+        settings_validation = _validate_payload_for_enqueue(load_settings(conn), payload)
+        if not settings_validation.ok:
+            raise HTTPException(status_code=400, detail=settings_validation.message)
 
         new_id = create_task(conn, payload, parent_task_id=task_id)
 

@@ -35,6 +35,7 @@ class TaskPayload(BaseModel):
     translation_output_mode: Literal["translated_only", "bilingual"] = "translated_only"
     test_num: str = "80"
     process_timeout: str = ""
+    fresh_download: bool = False
     settings_overrides: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("source_input", "upload_path", "merged_name", "test_num", "process_timeout", mode="before")

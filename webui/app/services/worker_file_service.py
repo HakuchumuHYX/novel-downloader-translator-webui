@@ -6,7 +6,18 @@ from pathlib import Path
 from typing import Callable
 
 
-REFUSAL_MARKERS = ("i'm sorry", "无法翻译", "不能翻译", "抱歉", "不适合")
+REFUSAL_MARKERS = (
+    "i'm sorry",
+    "i am sorry",
+    "sorry, but",
+    "i apologize",
+    "很抱歉",
+    "非常抱歉",
+    "无法翻译",
+    "不能翻译",
+    "我不能",
+    "我无法",
+)
 
 
 def safe_int(value) -> int:
@@ -58,7 +69,7 @@ def list_source_candidates(download_root: Path, save_format: str) -> list[Path]:
     def is_source_candidate(path: Path) -> bool:
         name = path.name.lower()
         excluded_markers = ("_翻译", "_temp", "source_metadata", "readme")
-        ignored_path_markers = ("_node_job_", "_native_job_", "_native_kakuyomu_", "_cookie_")
+        ignored_path_markers = ("_node_job_", "_native_job_", "_native_kakuyomu_", "_cookie_", ".work")
         return not any(marker in name for marker in excluded_markers) and not any(
             marker in part.lower() for marker in ignored_path_markers for part in path.parts
         )
@@ -102,15 +113,29 @@ def resolve_translated_file(source_path: Path) -> Path | None:
     return matches[0] if matches else None
 
 
+def _has_refusal_marker(text: str) -> bool:
+    for line in text.splitlines():
+        normalized = line.strip().lower()
+        if any(normalized.startswith(marker) for marker in REFUSAL_MARKERS):
+            return True
+    return False
+
+
 def scan_translation_quality(path: Path, source_path: Path | None = None) -> list[str]:
     if not path.exists() or not path.is_file():
         return ["translated output is missing"]
+    try:
+        if path.stat().st_size <= 0:
+            return ["translated output is empty"]
+    except OSError:
+        return ["translated output is missing"]
+    if path.suffix.lower() == ".epub":
+        return []
     text = path.read_text(encoding="utf-8", errors="ignore")
     warnings: list[str] = []
     if not text.strip():
         warnings.append("translated output is empty")
-    lower = text.lower()
-    if any(marker in lower for marker in REFUSAL_MARKERS):
+    if _has_refusal_marker(text):
         warnings.append("refusal marker found in translated output")
     if source_path and source_path.exists():
         source_lines = [

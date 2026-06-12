@@ -365,6 +365,12 @@ So you are close to reaching the limit. You have to choose your own value, there
         # ollama default api_base
         model_api_base = "http://localhost:11434/v1"
 
+    loader_kwargs = {}
+    if book_type == "epub":
+        loader_kwargs["defer_resume_load"] = True
+        loader_kwargs["metadata_language"] = options.language
+        loader_kwargs["strict_resume_fingerprint"] = True
+
     e = book_loader(
         options.book_name,
         translate_model,
@@ -381,8 +387,11 @@ So you are close to reaching the limit. You have to choose your own value, there
         temperature=options.temperature,
         source_lang=options.source_lang,
         parallel_workers=options.parallel_workers,
+        **loader_kwargs,
     )
     configure_loader_from_options(e, options)
+    if hasattr(e, "load_state_if_needed"):
+        e.load_state_if_needed()
 
     e.build_book()
 

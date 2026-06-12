@@ -13,6 +13,7 @@ from .common import (
     save_resume_entries,
     save_text_output,
 )
+from .helper import translate_model_with_backoff
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,26 @@ class TextBatch:
     index: int
     text: str
     translatable: bool = True
+
+
+MAX_NATURAL_CHUNK_LINES = max(1, int(os.getenv("BBM_TXT_MAX_CHUNK_LINES", "80")))
+MAX_NATURAL_CHUNK_CHARS = max(1000, int(os.getenv("BBM_TXT_MAX_CHUNK_CHARS", "12000")))
+
+
+def _would_exceed_chunk_limit(current: list[str], next_line: str) -> bool:
+    if not current:
+        return False
+    if len(current) >= MAX_NATURAL_CHUNK_LINES:
+        return True
+    current_chars = sum(len(line) + 1 for line in current)
+    return current_chars + len(next_line) + 1 > MAX_NATURAL_CHUNK_CHARS
+
+
+def _split_oversized_line(line: str) -> list[str]:
+    limit = MAX_NATURAL_CHUNK_CHARS
+    if len(line) <= limit:
+        return [line]
+    return [line[start : start + limit] for start in range(0, len(line), limit)]
 
 
 def _build_natural_chunks(lines: list[str]) -> list[str]:
@@ -39,6 +60,12 @@ def _build_natural_chunks(lines: list[str]) -> list[str]:
             chunks.append("\n".join(blank_run))
             blank_run = []
 
+    def append_line(line: str) -> None:
+        for part in _split_oversized_line(line):
+            if _would_exceed_chunk_limit(current, part):
+                flush_current()
+            current.append(part)
+
     for line in lines:
         starts_chapter = line.startswith("● ")
         blank = line.strip() == ""
@@ -46,7 +73,7 @@ def _build_natural_chunks(lines: list[str]) -> list[str]:
         if starts_chapter:
             flush_current()
             flush_blank_run()
-            current = [line]
+            append_line(line)
             continue
 
         if blank:
@@ -57,14 +84,15 @@ def _build_natural_chunks(lines: list[str]) -> list[str]:
             if len(blank_run) > 1:
                 flush_current()
                 flush_blank_run()
-                current = [line]
+                append_line(line)
             else:
                 flush_current()
-                current = blank_run + [line]
+                current = blank_run
+                append_line(line)
                 blank_run = []
             continue
 
-        current.append(line)
+        append_line(line)
 
     flush_current()
     flush_blank_run()
@@ -161,7 +189,7 @@ class TXTBookLoader(BaseBookLoader):
         # Keep using the configured loader-level translator instance so that
         # cli.py post-init model configuration (set_model_list/set_default_models ...)
         # is preserved for TXT mode.
-        result = self.translate_model.translate(batch_text)
+        result = translate_model_with_backoff(self.translate_model, batch_text)
         if result is None:
             raise RuntimeError("translate returned None")
         return result

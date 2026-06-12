@@ -241,7 +241,10 @@
 
   const FINISHED_STATES = new Set(['succeeded', 'failed', 'canceled']);
   const LOG_IDLE_STATES = new Set(['succeeded', 'failed', 'canceled', 'paused']);
+  const LOG_ACTIVE_STATES = new Set(['queued', 'running']);
   let pollTimer = null;
+  let tickInFlight = false;
+  let artifactSignature = '';
 
   function updateButtons(task) {
     const status = task?.status || rawStatus;
@@ -403,6 +406,12 @@
 
     updateButtons(task);
 
+    const nextArtifactSignature = (task.artifacts || [])
+      .map((a) => `${a.id}:${a.file_size || 0}:${a.modified_at || a.created_at || ''}`)
+      .join('|');
+    if (nextArtifactSignature === artifactSignature) return task;
+    artifactSignature = nextArtifactSignature;
+
     const list = document.getElementById('artifact-list');
     list.textContent = '';
     for (const a of task.artifacts) {
@@ -561,25 +570,36 @@
   }
 
   async function tick() {
-    const task = await refreshTask();
-    const status = task?.status || rawStatus;
-    lastKnownStatus = status;
+    if (tickInFlight) return;
+    tickInFlight = true;
+    try {
+      const task = await refreshTask();
+      const status = task?.status || rawStatus;
+      const previousStatus = lastKnownStatus;
+      lastKnownStatus = status;
 
-    if (FINISHED_STATES.has(status)) {
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
+      if (LOG_IDLE_STATES.has(previousStatus) && LOG_ACTIVE_STATES.has(status) && !logSource) {
+        startLogStream();
       }
 
-      // Close SSE and do one last drain via polling (best-effort).
-      if (logSource) {
-        try { logSource.close(); } catch (_) { }
-        logSource = null;
+      if (FINISHED_STATES.has(status)) {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+
+        // Close SSE and do one last drain via polling (best-effort).
+        if (logSource) {
+          try { logSource.close(); } catch (_) { }
+          logSource = null;
+        }
+        setTimeout(async () => {
+          await pollLogsOnce();
+          await refreshTask();
+        }, 300);
       }
-      setTimeout(async () => {
-        await pollLogsOnce();
-        await refreshTask();
-      }, 300);
+    } finally {
+      tickInFlight = false;
     }
   }
 
