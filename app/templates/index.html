@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if not api_ready %}
+<div class="notice">还没配置翻译接口，目前只能“只下载”。<a href="/settings">去设置 →</a></div>
+{% endif %}
+
+<form class="card" id="new-task">
+  <h2>新建任务</h2>
+  <div class="source">
+    <input type="url" name="url" id="url" placeholder="粘贴 syosetu / novel18 / kakuyomu 作品链接" autocomplete="off">
+    <label class="file-btn">上传 txt / epub<input type="file" name="file" id="file" accept=".txt,.epub"></label>
+  </div>
+  <div class="file-chip" id="file-chip">
+    <span id="file-name"></span>
+    <button type="button" id="file-clear" aria-label="移除文件">×</button>
+  </div>
+
+  <div class="options">
+    <div class="seg">
+      <label><input type="radio" name="mode" value="translate" checked><span>下载并翻译</span></label>
+      <label><input type="radio" name="mode" value="download" id="mode-download"><span>只下载</span></label>
+    </div>
+    <div class="seg">
+      <label><input type="radio" name="format" value="txt" id="format-txt" checked><span>txt</span></label>
+      <label><input type="radio" name="format" value="epub" id="format-epub"><span>epub</span></label>
+    </div>
+    <div class="seg" data-translate-only>
+      <label><input type="radio" name="bilingual" value="false" checked><span>仅译文</span></label>
+      <label><input type="radio" name="bilingual" value="true"><span>双语</span></label>
+    </div>
+    <label class="trial" data-translate-only>
+      试译 <input type="number" name="test_blocks" min="0" value="0"> 块
+      <span class="faint">0 为全文</span>
+    </label>
+  </div>
+
+  <div class="form-foot"><button class="primary" type="submit">开始</button></div>
+</form>
+
+<div class="card list-card"><ul class="tasks" id="tasks"></ul></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const form = document.getElementById("new-task");
+  const urlInput = document.getElementById("url");
+  const fileInput = document.getElementById("file");
+  const modeDownload = document.getElementById("mode-download");
+  const formatTxt = document.getElementById("format-txt");
+
+  function syncForm() {
+    const file = fileInput.files[0];
+    const isEpub = !!file && file.name.toLowerCase().endsWith(".epub");
+    document.getElementById("file-chip").classList.toggle("on", !!file);
+    document.getElementById("file-name").textContent = file ? file.name : "";
+
+    // 上传的文件只能翻译；epub 只能输出 epub
+    modeDownload.disabled = !!file;
+    if (file) form.mode.value = "translate";
+    formatTxt.disabled = isEpub;
+    if (isEpub) form.format.value = "epub";
+
+    const translating = form.mode.value === "translate";
+    for (const el of form.querySelectorAll("[data-translate-only]")) el.style.display = translating ? "" : "none";
+  }
+
+  urlInput.addEventListener("input", () => {
+    if (urlInput.value) fileInput.value = "";
+    syncForm();
+  });
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length) urlInput.value = "";
+    syncForm();
+  });
+  document.getElementById("file-clear").addEventListener("click", () => {
+    fileInput.value = "";
+    syncForm();
+  });
+  form.addEventListener("change", syncForm);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    if (!data.get("test_blocks")) data.set("test_blocks", "0");
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const { id } = await api("POST", "/api/tasks", data);
+      location.href = `/tasks/${id}`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  const list = document.getElementById("tasks");
+  function renderTasks(tasks) {
+    if (!tasks.length) {
+      list.innerHTML = '<li class="empty">还没有任务，粘贴一个链接试试</li>';
+      return;
+    }
+    list.innerHTML = tasks.map((t) => {
+      const running = t.status === "running";
+      const progress = running && progressText(t) ? ` · ${progressText(t)}` : "";
+      return `<li><a class="task-row" href="/tasks/${t.id}">
+        <div class="task-head">
+          <span class="task-title">${esc(t.title)}</span>
+          <span class="pill ${t.status}">${STATUS_LABELS[t.status]}</span>
+        </div>
+        <div class="task-meta">${esc(describe(t))} · ${fmtTime(t.created_at)}${esc(progress)}</div>
+        ${running ? `<div class="bar"><i style="width:${progressPct(t)}%"></i></div>` : ""}
+      </a></li>`;
+    }).join("");
+  }
+
+  async function refresh() {
+    const tasks = await fetch("/api/tasks").then((r) => r.json());
+    renderTasks(tasks);
+    const active = tasks.some((t) => t.status === "queued" || t.status === "running");
+    setTimeout(refresh, active ? 3000 : 15000);
+  }
+
+  renderTasks({{ tasks | tojson }});
+  setTimeout(refresh, 3000);
+  syncForm();
+</script>
+{% endblock %}

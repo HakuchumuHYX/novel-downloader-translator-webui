@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}小说翻译{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <a class="brand" href="/"><span class="seal">訳</span><span class="brand-name">小说翻译</span></a>
+      <nav class="nav">
+        <a href="/">任务</a>
+        <a href="/settings">设置</a>
+      </nav>
+    </header>
+    {% block content %}{% endblock %}
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const STATUS_LABELS = {{ STATUS_LABELS | tojson }};
+
+    for (const link of document.querySelectorAll(".nav a")) {
+      const path = location.pathname;
+      const settings = path.startsWith("/settings");
+      if ((link.getAttribute("href") === "/settings") === settings) link.classList.add("on");
+    }
+
+    let toastTimer;
+    function toast(message) {
+      const el = document.getElementById("toast");
+      el.textContent = message;
+      el.classList.add("on");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove("on"), 3200);
+    }
+
+    async function api(method, url, body) {
+      const resp = await fetch(url, { method, body, headers: { "X-Requested-With": "fetch" } });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const message = typeof data.detail === "string" ? data.detail : `请求失败（${resp.status}）`;
+        toast(message);
+        throw new Error(message);
+      }
+      return data;
+    }
+
+    function esc(text) {
+      const div = document.createElement("div");
+      div.textContent = text ?? "";
+      return div.innerHTML;
+    }
+
+    const pad = (n) => String(n).padStart(2, "0");
+    function fmtTime(iso, withSeconds = false) {
+      const d = new Date(iso);
+      const time = `${pad(d.getHours())}:${pad(d.getMinutes())}` + (withSeconds ? `:${pad(d.getSeconds())}` : "");
+      return withSeconds ? time : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+    }
+
+    function fmtSize(bytes) {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    }
+
+    function describe(t) {
+      const o = t.options;
+      const parts = [`#${t.id}`, o.mode === "download" ? "只下载" : t.url ? "下载并翻译" : "翻译文件", o.format];
+      if (o.mode === "translate") {
+        parts.push(o.bilingual ? "双语" : "仅译文");
+        if (o.test_blocks) parts.push(`试译 ${o.test_blocks} 块`);
+      }
+      return parts.join(" · ");
+    }
+
+    function progressText(t) {
+      if (!t.stage) return "";
+      const [label, unit] = t.stage === "download" ? ["下载", "章"] : ["翻译", "块"];
+      return t.progress_total ? `${label} ${t.progress_current} / ${t.progress_total} ${unit}` : `${label}准备中`;
+    }
+
+    function progressPct(t) {
+      return t.progress_total ? Math.round((t.progress_current / t.progress_total) * 100) : 0;
+    }
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

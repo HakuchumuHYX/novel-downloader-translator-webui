@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}{{ task.title }} · 小说翻译{% endblock %}
+
+{% block content %}
+<a class="back" href="/">← 全部任务</a>
+
+<div class="card">
+  <h1 id="title">{{ task.title }}</h1>
+  <div class="source-line">{{ task.url or task.upload_name }} · <span id="describe"></span></div>
+  <div class="status-line">
+    <span class="pill" id="status"></span>
+    <span class="muted" id="progress-text"></span>
+  </div>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="error-box" id="error" hidden></div>
+  <div class="actions">
+    <button id="btn-full" class="primary" hidden>转全文</button>
+    <button id="btn-retry" hidden>重试</button>
+    <button id="btn-stop" hidden>停止</button>
+    <button id="btn-delete" class="danger" hidden>删除</button>
+  </div>
+</div>
+
+<div class="card" id="files-card" hidden>
+  <h2>产物</h2>
+  <ul class="files" id="files"></ul>
+</div>
+
+<h2>日志</h2>
+<pre class="log" id="log"></pre>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const TASK_ID = {{ task.id }};
+  const logEl = document.getElementById("log");
+  let lastLogId = 0;
+  let timer;
+
+  function show(id, visible) {
+    document.getElementById(id).hidden = !visible;
+  }
+
+  function render({ task: t, files, logs }) {
+    const active = t.status === "queued" || t.status === "running";
+    document.getElementById("title").textContent = t.title;
+    document.getElementById("describe").textContent = describe(t);
+
+    const status = document.getElementById("status");
+    status.className = `pill ${t.status}`;
+    status.textContent = STATUS_LABELS[t.status];
+    document.getElementById("progress-text").textContent = progressText(t);
+    document.getElementById("bar").style.width = `${t.status === "succeeded" ? 100 : progressPct(t)}%`;
+
+    const error = document.getElementById("error");
+    error.hidden = !(t.status === "failed" && t.error);
+    error.textContent = t.error;
+
+    show("btn-stop", active);
+    show("btn-retry", t.status === "failed" || t.status === "canceled");
+    show("btn-full", !active && t.options.mode === "translate" && t.options.test_blocks > 0);
+    show("btn-delete", t.status !== "running");
+
+    show("files-card", files.length > 0);
+    document.getElementById("files").innerHTML = files.map((f) => `
+      <li>
+        <span class="name">${esc(f.name)}</span>
+        <span><span class="faint">${fmtSize(f.size)}</span>
+        <a class="btn" href="/tasks/${TASK_ID}/files/${encodeURIComponent(f.name)}">下载</a></span>
+      </li>`).join("");
+
+    if (logs.length) {
+      const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+      for (const log of logs) {
+        const time = document.createElement("span");
+        time.className = "t";
+        time.textContent = fmtTime(log.created_at, true);
+        logEl.append(time, log.message + "\n");
+      }
+      lastLogId = logs[logs.length - 1].id;
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+    return active;
+  }
+
+  async function poll() {
+    clearTimeout(timer);
+    const data = await fetch(`/api/tasks/${TASK_ID}?after=${lastLogId}`).then((r) => r.json());
+    const active = render(data);
+    timer = setTimeout(poll, active ? 2000 : 10000);
+  }
+
+  async function act(action) {
+    await api("POST", `/api/tasks/${TASK_ID}/${action}`);
+    poll();
+  }
+
+  document.getElementById("btn-stop").onclick = () => act("stop");
+  document.getElementById("btn-retry").onclick = () => act("retry");
+  document.getElementById("btn-full").onclick = () => act("full");
+  document.getElementById("btn-delete").onclick = async () => {
+    if (!confirm("删除任务和它的所有文件？")) return;
+    await api("DELETE", `/api/tasks/${TASK_ID}`);
+    location.href = "/";
+  };
+
+  poll();
+</script>
+{% endblock %}

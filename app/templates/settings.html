@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}设置 · 小说翻译{% endblock %}
+
+{% macro secret(key, label, hint, type="text") %}
+<div class="field">
+  <label for="{{ key }}">{{ label }}</label>
+  <input type="{{ type }}" id="{{ key }}" name="{{ key }}" autocomplete="new-password"
+         placeholder="{{ secrets[key] or '未设置' }}">
+  <div class="hint">{{ hint }}</div>
+  {% if secrets[key] %}
+  <label class="check"><input type="checkbox" name="clear_{{ key }}" value="1"> 清除</label>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% block content %}
+<form id="settings">
+  <div class="card">
+    <h2>翻译接口</h2>
+    <div class="field">
+      <label for="api_base">API 地址</label>
+      <input type="text" id="api_base" name="api_base" value="{{ cfg.api_base }}" placeholder="https://api.openai.com/v1">
+      <div class="hint">任意 OpenAI 兼容地址；留空为 OpenAI 官方。</div>
+    </div>
+    {{ secret("api_key", "API Key", "留空表示不修改。", "password") }}
+    <div class="field">
+      <label for="model">模型</label>
+      <input type="text" id="model" name="model" value="{{ cfg.model }}" placeholder="deepseek-ai/DeepSeek-V3.2">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>译文风格</h2>
+    <div class="field">
+      <label for="language">目标语言</label>
+      <input type="text" id="language" name="language" value="{{ cfg.language }}">
+      <div class="hint">填进提示词里的 {language}；含“中文”时 epub 语言标为中文。</div>
+    </div>
+    <div class="field">
+      <label for="prompt_system">系统提示词</label>
+      <textarea id="prompt_system" name="prompt_system" rows="8">{{ cfg.prompt_system }}</textarea>
+      <div class="hint">建议保留“逐行对应、保留 ● 章节标记”的要求，否则分章和段落会乱。</div>
+    </div>
+    <div class="field">
+      <label for="prompt_user">用户提示词</label>
+      <textarea id="prompt_user" name="prompt_user" rows="4">{{ cfg.prompt_user }}</textarea>
+      <div class="hint">必须包含 {text}，可用 {language}。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>运行</h2>
+    <div class="field">
+      <label for="parallel_workers">翻译并发数</label>
+      <input type="number" id="parallel_workers" name="parallel_workers" min="1" max="32" value="{{ cfg.parallel_workers }}">
+    </div>
+    <div class="field">
+      <label for="proxy">代理</label>
+      <input type="text" id="proxy" name="proxy" value="{{ cfg.proxy }}" placeholder="http://127.0.0.1:7890">
+      <div class="hint">下载和翻译都走这个代理；留空直连。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>站点 Cookie</h2>
+    {{ secret("cookie_novel18", "novel18（ノクターン）", "必填：登录后从浏览器复制整段 Cookie 请求头。") }}
+    {{ secret("cookie_syosetu", "syosetu（なろう）", "一般不需要。") }}
+    {{ secret("cookie_kakuyomu", "kakuyomu（カクヨム）", "一般不需要。") }}
+  </div>
+
+  <div class="save-bar">
+    <button class="primary" type="submit">保存设置</button>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById("settings").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await api("POST", "/api/settings", new FormData(event.target));
+    toast("已保存");
+    setTimeout(() => location.reload(), 600);
+  });
+</script>
+{% endblock %}
