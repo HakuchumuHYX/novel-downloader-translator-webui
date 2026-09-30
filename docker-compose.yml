@@ -18,7 +18,7 @@ services:
       init-data-permissions:
         condition: service_completed_successfully
     ports:
-      - "${WEBUI_PORT:-7860}:7860"
+      - "127.0.0.1:${WEBUI_PORT:-7860}:7860"
     env_file:
       - .env
     user: "${WEBUI_CONTAINER_USER:-app}"
