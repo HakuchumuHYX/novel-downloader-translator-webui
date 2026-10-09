@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}小说翻译{% endblock %}</title>
+  <title>{{block "title" .}}小说翻译{{end}}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -15,12 +15,12 @@
         <a href="/settings">设置</a>
       </nav>
     </header>
-    {% block content %}{% endblock %}
+    {{block "content" .}}{{end}}
   </div>
   <div class="toast" id="toast"></div>
 
   <script>
-    const STATUS_LABELS = {{ STATUS_LABELS | tojson }};
+    const STATUS_LABELS = {{statusLabels}};
 
     for (const link of document.querySelectorAll(".nav a")) {
       const path = location.pathname;
@@ -87,6 +87,6 @@
       return t.progress_total ? Math.round((t.progress_current / t.progress_total) * 100) : 0;
     }
   </script>
-  {% block scripts %}{% endblock %}
+  {{block "scripts" .}}{{end}}
 </body>
 </html>

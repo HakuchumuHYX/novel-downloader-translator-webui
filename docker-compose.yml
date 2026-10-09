@@ -13,7 +13,7 @@ services:
       - ./data:/data
     restart: always
     healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/healthz', timeout=3)" ]
+      test: [ "CMD", "wget", "-q", "-T", "3", "--spider", "http://127.0.0.1:7860/healthz" ]
       interval: 30s
       timeout: 5s
       retries: 3

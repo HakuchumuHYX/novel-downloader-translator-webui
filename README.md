@@ -5,18 +5,15 @@
 ## 结构
 
 ```text
-app/          FastAPI + Jinja 页面、SQLite、单线程任务队列
-downloader/   python -m downloader —— 抓 syosetu / novel18 / kakuyomu，合并成一个 txt（可转 epub）
-translator/   python -m translator —— 翻译 txt / epub
+main.go       入口：读环境变量，启动服务
+app/          页面（html/template）、接口、SQLite、单 goroutine 任务队列
+downloader/   抓 syosetu / novel18 / kakuyomu，合并成一个 txt（可转 epub）
+translator/   翻译 txt / epub，「● 标题」txt 转 epub
 data/         运行时数据（app.sqlite3、tasks/<id>/{input,work,out}）
+docs/         架构说明
 ```
 
-webui 以子进程方式调用 downloader 和 translator，停止任务就是杀掉子进程组。子进程通过 stdout 上报：
-
-```text
-__PROGRESS__ {"stage": "download|translate", "current": n, "total": m}
-__RESULT__ "产物路径"
-```
+下载和翻译都在服务进程内执行，停止任务就是取消该任务的 context。
 
 ## 行为要点
 
@@ -36,12 +33,14 @@ docker compose up -d --build
 
 端口只绑 `127.0.0.1`，对外访问请用反向代理（nginx 等）转发。API 地址、Key、模型、提示词、Cookie 等都在页面的“设置”里填，存在 `data/app.sqlite3`。
 
-本地调试：
+本地调试（Go 1.26+）：
 
 ```bash
-pip install -r requirements.txt
-WEBUI_BASIC_AUTH_USER=u WEBUI_BASIC_AUTH_PASSWORD=p uvicorn app.main:app --port 7860
+go build -o translator_webui .
+WEBUI_BASIC_AUTH_USER=u WEBUI_BASIC_AUTH_PASSWORD=p LISTEN_ADDR=127.0.0.1:7860 ./translator_webui
 ```
+
+`DATA_DIR` 默认是当前目录下的 `data/`。
 
 ## 来源
 

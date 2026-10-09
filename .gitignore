@@ -2,6 +2,5 @@
 .env.*
 !.env.example
 data/
-__pycache__/
-*.py[cod]
-.venv/
+/translator_webui
+docs/

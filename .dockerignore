@@ -2,6 +2,6 @@
 .env
 .env.*
 data/
+docs/
 scripts/
-**/__pycache__/
-*.py[cod]
+/translator_webui

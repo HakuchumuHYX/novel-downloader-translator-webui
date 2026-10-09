@@ -1,13 +1,11 @@
-{% extends "base.html" %}
+{{define "title"}}{{.Task.Title}} · 小说翻译{{end}}
 
-{% block title %}{{ task.title }} · 小说翻译{% endblock %}
-
-{% block content %}
+{{define "content"}}
 <a class="back" href="/">← 全部任务</a>
 
 <div class="card">
-  <h1 id="title">{{ task.title }}</h1>
-  <div class="source-line">{{ task.url or task.upload_name }} · <span id="describe"></span></div>
+  <h1 id="title">{{.Task.Title}}</h1>
+  <div class="source-line">{{or .Task.URL .Task.UploadName}} · <span id="describe"></span></div>
   <div class="status-line">
     <span class="pill" id="status"></span>
     <span class="muted" id="progress-text"></span>
@@ -29,11 +27,11 @@
 
 <h2>日志</h2>
 <pre class="log" id="log"></pre>
-{% endblock %}
+{{end}}
 
-{% block scripts %}
+{{define "scripts"}}
 <script>
-  const TASK_ID = {{ task.id }};
+  const TASK_ID = {{.Task.ID}};
   const logEl = document.getElementById("log");
   let lastLogId = 0;
   let timer;
@@ -107,4 +105,4 @@
 
   poll();
 </script>
-{% endblock %}
+{{end}}

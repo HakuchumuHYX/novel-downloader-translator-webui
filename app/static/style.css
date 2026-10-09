@@ -47,6 +47,9 @@
 
 * { box-sizing: border-box; }
 
+/* button 等元素设了 display，会盖掉浏览器默认的 [hidden] 规则 */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
